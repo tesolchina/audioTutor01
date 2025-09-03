@@ -1,0 +1,14 @@
+flask
+flask_socketio
+requests
+python-dotenv
+eventlet
+numpy
+SpeechRecognition
+flask-cors
+scipy
+azure-cognitiveservices-speech
+gtts
+edge-tts
+pydub
+ffmpeg-python

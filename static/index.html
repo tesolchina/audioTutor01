@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Bytewise Backend - API Test Interface</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        h2 {
+            color: #555;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+        .section {
+            margin-bottom: 30px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .success {
+            background: #28a745;
+        }
+        .warning {
+            background: #ffc107;
+            color: #333;
+        }
+        .danger {
+            background: #dc3545;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-family: monospace;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin: 5px 0;
+        }
+        .result {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 10px 0;
+            white-space: pre-wrap;
+            font-family: monospace;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 New Bytewise Backend - API Test Interface</h1>
+        <p style="text-align: center; color: #666;">
+            Welcome to your Flask + SocketIO backend! Use this interface to test all the API endpoints.
+        </p>
+    </div>
+
+    <div class="grid">
+        <!-- REST API Testing -->
+        <div class="container">
+            <h2>🌐 REST API Endpoints</h2>
+            
+            <div class="section">
+                <h3>Basic Endpoints</h3>
+                <button onclick="testEndpoint('/api/chatbot/a', 'GET')">Test Chatbot Endpoint</button>
+                <button onclick="testEndpoint('/api/streaming-avatar/a', 'GET')">Test Streaming Avatar</button>
+                <div id="basicResults" class="result"></div>
+            </div>
+
+            <div class="section">
+                <h3>Chat Completion API</h3>
+                <textarea id="chatInput" placeholder="Enter your message here...">Hello, how are you?</textarea>
+                <input type="text" id="apiKey" placeholder="API Key (optional for testing)">
+                <input type="text" id="modelName" placeholder="Model Name (default: gpt-4)" value="gpt-4">
+                <br>
+                <button onclick="testChatCompletion()">Send Chat Message</button>
+                <div id="chatResults" class="result"></div>
+            </div>
+        </div>
+
+        <!-- WebSocket Testing -->
+        <div class="container">
+            <h2>🔌 WebSocket Connection</h2>
+            
+            <div class="section">
+                <div id="wsStatus" class="status disconnected">Disconnected</div>
+                <button id="connectBtn" onclick="connectWebSocket()">Connect WebSocket</button>
+                <button id="disconnectBtn" onclick="disconnectWebSocket()" disabled>Disconnect</button>
+                <br><br>
+                <button onclick="sendTestAudio()" id="sendAudioBtn" disabled>Send Test Audio Data</button>
+                <div id="wsResults" class="result"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Server Info -->
+    <div class="container">
+        <h2>📊 Server Information</h2>
+        <div class="section">
+            <button onclick="getServerInfo()">Check Server Status</button>
+            <button onclick="clearAllResults()">Clear All Results</button>
+            <div id="serverInfo" class="result"></div>
+        </div>
+    </div>
+
+    <!-- External API Test -->
+    <div class="container">
+        <h2>🤖 External API Integration</h2>
+        <div class="section">
+            <p>The external API test runs the streaming test with HKBU GenAI API.</p>
+            <button onclick="showExternalApiInfo()">Show External API Info</button>
+            <div id="externalApiInfo" class="result"></div>
+        </div>
+    </div>
+
+    <script>
+        let socket = null;
+        const baseUrl = window.location.origin;
+
+        // WebSocket functionality
+        function connectWebSocket() {
+            try {
+                socket = io('/api/streaming-avatar');
+                
+                socket.on('connect', () => {
+                    updateWSStatus('Connected', true);
+                    logWSMessage('✅ Connected to WebSocket server!');
+                });
+
+                socket.on('disconnect', () => {
+                    updateWSStatus('Disconnected', false);
+                    logWSMessage('❌ Disconnected from WebSocket server');
+                });
+
+                socket.on('message', (data) => {
+                    logWSMessage('📨 Received message: ' + JSON.stringify(data, null, 2));
+                });
+
+                socket.on('stt_result', (data) => {
+                    logWSMessage('🎤 STT Result: ' + JSON.stringify(data, null, 2));
+                });
+
+            } catch (error) {
+                logWSMessage('❌ Error connecting: ' + error.message);
+            }
+        }
+
+        function disconnectWebSocket() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+            }
+        }
+
+        function sendTestAudio() {
+            if (socket && socket.connected) {
+                const testData = new Uint8Array([1, 2, 3, 4, 5]);
+                socket.emit('user_audio', testData);
+                logWSMessage('📤 Sent test audio data');
+            } else {
+                logWSMessage('❌ WebSocket not connected');
+            }
+        }
+
+        function updateWSStatus(status, connected) {
+            const statusDiv = document.getElementById('wsStatus');
+            statusDiv.textContent = status;
+            statusDiv.className = connected ? 'status connected' : 'status disconnected';
+            
+            document.getElementById('connectBtn').disabled = connected;
+            document.getElementById('disconnectBtn').disabled = !connected;
+            document.getElementById('sendAudioBtn').disabled = !connected;
+        }
+
+        function logWSMessage(message) {
+            const results = document.getElementById('wsResults');
+            const timestamp = new Date().toLocaleTimeString();
+            results.textContent += `[${timestamp}] ${message}\n`;
+            results.scrollTop = results.scrollHeight;
+        }
+
+        // REST API functionality
+        async function testEndpoint(endpoint, method = 'GET') {
+            const results = document.getElementById('basicResults');
+            try {
+                results.textContent = 'Testing ' + endpoint + '...\n';
+                
+                const response = await fetch(baseUrl + endpoint, {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+                results.textContent += `Status: ${response.status}\n`;
+                results.textContent += `Response: ${JSON.stringify(data, null, 2)}\n\n`;
+                
+            } catch (error) {
+                results.textContent += `Error: ${error.message}\n\n`;
+            }
+        }
+
+        async function testChatCompletion() {
+            const results = document.getElementById('chatResults');
+            const message = document.getElementById('chatInput').value;
+            const apiKey = document.getElementById('apiKey').value || 'test-key';
+            const modelName = document.getElementById('modelName').value || 'gpt-4';
+
+            try {
+                results.textContent = 'Sending chat message...\n';
+
+                const payload = {
+                    chat_history: [
+                        { role: "system", content: "You are a helpful assistant." },
+                        { role: "user", content: message }
+                    ],
+                    api_key: apiKey,
+                    model_name: modelName,
+                    max_tokens: 150
+                };
+
+                const response = await fetch(baseUrl + '/api/chatbot/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+                results.textContent += `Status: ${response.status}\n`;
+                results.textContent += `Response: ${JSON.stringify(data, null, 2)}\n\n`;
+
+            } catch (error) {
+                results.textContent += `Error: ${error.message}\n\n`;
+            }
+        }
+
+        async function getServerInfo() {
+            const results = document.getElementById('serverInfo');
+            results.textContent = 'Checking server status...\n';
+
+            try {
+                // Test multiple endpoints
+                const endpoints = [
+                    '/api/chatbot/a',
+                    '/api/streaming-avatar/a'
+                ];
+
+                for (const endpoint of endpoints) {
+                    const response = await fetch(baseUrl + endpoint);
+                    const data = await response.json();
+                    results.textContent += `${endpoint}: ${response.status} - ${JSON.stringify(data)}\n`;
+                }
+
+                results.textContent += `\nServer Time: ${new Date().toLocaleString()}\n`;
+                results.textContent += `Base URL: ${baseUrl}\n`;
+                
+            } catch (error) {
+                results.textContent += `Error: ${error.message}\n`;
+            }
+        }
+
+        function showExternalApiInfo() {
+            const results = document.getElementById('externalApiInfo');
+            results.textContent = `External API Integration Info:
+
+The backend integrates with HKBU GenAI API for chat completions.
+
+Endpoint: https://genai.hkbu.edu.hk/api/v0/rest/deployments/gpt-4.1/chat/completions
+Method: POST with streaming support
+
+To test the external API, you can run the test script:
+1. Open terminal
+2. Run: python test.py
+
+Note: The test script contains a hardcoded API key for demonstration.
+In production, use environment variables for API keys.
+
+Current chat completion endpoint accepts:
+- chat_history: Array of message objects
+- api_key: Your HKBU API key
+- model_name: Model to use (default: gpt-4)
+- max_tokens: Response length limit
+`;
+        }
+
+        function clearAllResults() {
+            document.getElementById('basicResults').textContent = '';
+            document.getElementById('chatResults').textContent = '';
+            document.getElementById('wsResults').textContent = '';
+            document.getElementById('serverInfo').textContent = '';
+            document.getElementById('externalApiInfo').textContent = '';
+        }
+
+        // Initialize page
+        window.onload = function() {
+            // Auto-check server status
+            getServerInfo();
+        };
+    </script>
+</body>
+</html>
