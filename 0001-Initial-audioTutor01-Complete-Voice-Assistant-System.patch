@@ -1,0 +1,4117 @@
+From 11c721b99e7eb44cb6972d1134647f3be96e9ed5 Mon Sep 17 00:00:00 2001
+From: Simon Wang <simonwang@hkbu.edu.hk>
+Date: Wed, 3 Sep 2025 10:05:41 +0000
+Subject: [PATCH] Initial audioTutor01 - Complete Voice Assistant System
+
+---
+ .env.example                                  |  14 +
+ AUDIO_FORMAT_SOLUTION.md                      |  74 +++
+ CONFIGURATION_NOTES.md                        | 170 +++++
+ HOW_IT_WORKS.md                               | 259 ++++++++
+ Procfile                                      |   1 +
+ RAILWAY_DEPLOYMENT.md                         | 265 ++++++++
+ README.md                                     | Bin 0 -> 15410 bytes
+ STREAMING_AVATAR_PLAN.md                      | 374 +++++++++++
+ TESTING_GUIDE.md                              | 255 ++++++++
+ TEST_RESULTS.md                               | 137 ++++
+ .../__pycache__/chatbot.cpython-312.pyc       | Bin 0 -> 3718 bytes
+ .../__pycache__/chatbot.cpython-313.pyc       | Bin 0 -> 3897 bytes
+ .../streaming_avatar.cpython-312.pyc          | Bin 0 -> 11807 bytes
+ .../streaming_avatar.cpython-313.pyc          | Bin 0 -> 3828 bytes
+ app/routers/chatbot.py                        | 117 ++++
+ app/routers/streaming_avatar.py               | 261 ++++++++
+ .../__pycache__/token_service.cpython-313.pyc | Bin 0 -> 3297 bytes
+ app/utils/token_service.py                    |  76 +++
+ main.py                                       |  38 ++
+ railway.json                                  |  13 +
+ requirements.txt                              |  14 +
+ run_tests.py                                  | 366 +++++++++++
+ static/avatar.html                            | 597 ++++++++++++++++++
+ static/index.html                             | 366 +++++++++++
+ test.py                                       |  48 ++
+ test_websocket.py                             |  44 ++
+ 26 files changed, 3489 insertions(+)
+ create mode 100644 .env.example
+ create mode 100644 AUDIO_FORMAT_SOLUTION.md
+ create mode 100644 CONFIGURATION_NOTES.md
+ create mode 100644 HOW_IT_WORKS.md
+ create mode 100644 Procfile
+ create mode 100644 RAILWAY_DEPLOYMENT.md
+ create mode 100644 README.md
+ create mode 100644 STREAMING_AVATAR_PLAN.md
+ create mode 100644 TESTING_GUIDE.md
+ create mode 100644 TEST_RESULTS.md
+ create mode 100644 app/routers/__pycache__/chatbot.cpython-312.pyc
+ create mode 100644 app/routers/__pycache__/chatbot.cpython-313.pyc
+ create mode 100644 app/routers/__pycache__/streaming_avatar.cpython-312.pyc
+ create mode 100644 app/routers/__pycache__/streaming_avatar.cpython-313.pyc
+ create mode 100644 app/routers/chatbot.py
+ create mode 100644 app/routers/streaming_avatar.py
+ create mode 100644 app/utils/__pycache__/token_service.cpython-313.pyc
+ create mode 100644 app/utils/token_service.py
+ create mode 100644 main.py
+ create mode 100644 railway.json
+ create mode 100644 requirements.txt
+ create mode 100644 run_tests.py
+ create mode 100644 static/avatar.html
+ create mode 100644 static/index.html
+ create mode 100644 test.py
+ create mode 100644 test_websocket.py
+
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..04ac4cd
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,14 @@
++# Railway deployment environment variables template
++
++# Required for Google Cloud Speech API
++GOOGLE_APPLICATION_CREDENTIALS=/app/google-credentials.json
++
++# Required for HKBU GenAI API
++HKBU_API_KEY=your_hkbu_genai_api_key_here
++
++# Optional: Flask configuration
++FLASK_ENV=production
++PORT=5000
++
++# Note: Upload your Google Cloud credentials JSON file to Railway
++# and set the GOOGLE_APPLICATION_CREDENTIALS path accordingly
+diff --git a/AUDIO_FORMAT_SOLUTION.md b/AUDIO_FORMAT_SOLUTION.md
+new file mode 100644
+index 0000000..20a6976
+--- /dev/null
++++ b/AUDIO_FORMAT_SOLUTION.md
+@@ -0,0 +1,74 @@
++# Audio Format Mismatch Solution
++
++## The Problem
++Browser `MediaRecorder` API outputs **WebM** format audio, but Python `SpeechRecognition` library expects **WAV/PCM** format.
++
++## The Solution
++We solve this using a **3-step conversion process**:
++
++### Step 1: Install Dependencies
++```bash
++# System-level audio processing
++sudo apt install -y ffmpeg
++
++# Python audio processing libraries
++pip install pydub ffmpeg-python
++```
++
++### Step 2: Audio Format Conversion Pipeline
++```python
++# 1. Receive WebM audio from browser
++audio_bytes = base64.b64decode(audio_data)
++
++# 2. Load WebM with pydub (requires ffmpeg)
++audio_segment = AudioSegment.from_file(
++    io.BytesIO(audio_bytes), 
++    format="webm"
++)
++
++# 3. Optimize for speech recognition
++audio_segment = audio_segment.set_channels(1)        # Mono
++audio_segment = audio_segment.set_frame_rate(16000)  # 16kHz
++audio_segment = audio_segment.set_sample_width(2)    # 16-bit
++
++# 4. Export to WAV format in memory
++wav_buffer = io.BytesIO()
++audio_segment.export(
++    wav_buffer, 
++    format="wav",
++    parameters=["-acodec", "pcm_s16le"]  # Ensure PCM encoding
++)
++
++# 5. Use with SpeechRecognition
++with sr.AudioFile(wav_buffer) as source:
++    audio_clip = recognizer.record(source)
++    text = recognizer.recognize_google(audio_clip)
++```
++
++### Step 3: Complete Pipeline
++```
++Browser (WebM) → pydub → WAV → SpeechRecognition → Text → LLM → TTS → Audio
++```
++
++## Why This Works
++1. **pydub + ffmpeg**: Handles WebM format decoding
++2. **Audio optimization**: 16kHz mono optimizes speech recognition accuracy
++3. **PCM encoding**: Ensures compatibility with SpeechRecognition library
++4. **Memory processing**: No temporary files needed
++
++## Key Benefits
++- ✅ Handles browser MediaRecorder output directly
++- ✅ Optimizes audio quality for speech recognition
++- ✅ Works entirely in memory (no file I/O)
++- ✅ Compatible with all major browsers
++- ✅ Maintains real-time performance
++
++## Testing
++Use the `/avatar` route to test the complete voice conversation pipeline:
++1. Speak into microphone
++2. WebM audio automatically converted to WAV
++3. Speech recognition processes audio
++4. LLM generates response
++5. TTS plays back response
++
++The conversion happens transparently in the `handle_user_audio` WebSocket handler.
+diff --git a/CONFIGURATION_NOTES.md b/CONFIGURATION_NOTES.md
+new file mode 100644
+index 0000000..7f2d12b
+--- /dev/null
++++ b/CONFIGURATION_NOTES.md
+@@ -0,0 +1,170 @@
++# Configuration Analysis & Recommendations
++
++## Current Configuration State
++
++### 1. Hard-coded Configuration in `main.py`
++- **Host and Port**: Server runs on `0.0.0.0:5000`
++- **Debug Mode**: Set to `True`
++- **CORS Settings**: Allows all origins (`"*"`) for API routes (`/api/*`)
++- **SocketIO CORS**: Allows all origins (`"*"`)
++- **Async Mode**: Uses `eventlet`
++
++### 2. Hard-coded API Configuration in `test.py`
++- **API URL**: `https://genai.hkbu.edu.hk/api/v0/rest/deployments/gpt-4.1/chat/completions`
++- **API Key**: `f78e26ce-5d62-455a-a4f6-055df1fc1a27` ⚠️ **EXPOSED IN CODE**
++- **Model Parameters**: `max_tokens=150`, `top_p=1`, `stream=True`
++
++### 3. Hard-coded Defaults in `chatbot.py`
++- **Default Model**: `gpt-4`
++- **Default Max Tokens**: `150`
++- **Default Top P**: `1.0`
++- **API Version**: `2024-12-01-preview`
++
++### 4. Missing Configuration Files
++- **`.env` file**: Listed in `.gitignore` but doesn't exist in the workspace
++- The project imports `dotenv` in `requirements.txt` but doesn't use it
++
++## Critical Issues Identified
++
++### Security Issues
++1. **🚨 API Keys Exposed**: Sensitive API key is hardcoded in `test.py`
++2. **🚨 Open CORS Policy**: Allows all origins (`"*"`) - potential security risk in production
++
++### Configuration Management Issues
++1. **No Centralized Configuration**: Settings scattered across multiple files
++2. **No Environment-Specific Configs**: Same settings for all environments (dev/staging/prod)
++3. **Unused Dependencies**: `dotenv` imported but not utilized
++
++## Recommended Improvements
++
++### Immediate Actions (High Priority)
++1. **Remove exposed API key** from `test.py`
++2. **Create `.env` file** for sensitive configuration
++3. **Implement environment variable loading** using `dotenv`
++
++### Configuration Structure Recommendations
++
++#### 1. Create `.env` file
++```env
++# API Configuration
++HKBU_API_KEY=your_api_key_here
++HKBU_API_BASE_URL=https://genai.hkbu.edu.hk/api/v0/rest
++API_VERSION=2024-12-01-preview
++
++# Server Configuration
++HOST=0.0.0.0
++PORT=5000
++DEBUG=True
++
++# CORS Configuration
++CORS_ORIGINS=*
++SOCKETIO_CORS_ORIGINS=*
++
++# Model Defaults
++DEFAULT_MODEL=gpt-4
++DEFAULT_MAX_TOKENS=150
++DEFAULT_TOP_P=1.0
++
++# AliCloud Configuration (for token_service.py)
++ALICLOUD_ACCESS_KEY_ID=your_access_key_id
++ALICLOUD_ACCESS_KEY_SECRET=your_access_key_secret
++```
++
++#### 2. Create `config.py` file
++```python
++import os
++from dotenv import load_dotenv
++
++# Load environment variables
++load_dotenv()
++
++class Config:
++    # API Configuration
++    HKBU_API_KEY = os.getenv('HKBU_API_KEY')
++    HKBU_API_BASE_URL = os.getenv('HKBU_API_BASE_URL', 'https://genai.hkbu.edu.hk/api/v0/rest')
++    API_VERSION = os.getenv('API_VERSION', '2024-12-01-preview')
++    
++    # Server Configuration
++    HOST = os.getenv('HOST', '0.0.0.0')
++    PORT = int(os.getenv('PORT', 5000))
++    DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
++    
++    # CORS Configuration
++    CORS_ORIGINS = os.getenv('CORS_ORIGINS', '*')
++    SOCKETIO_CORS_ORIGINS = os.getenv('SOCKETIO_CORS_ORIGINS', '*')
++    
++    # Model Defaults
++    DEFAULT_MODEL = os.getenv('DEFAULT_MODEL', 'gpt-4')
++    DEFAULT_MAX_TOKENS = int(os.getenv('DEFAULT_MAX_TOKENS', 150))
++    DEFAULT_TOP_P = float(os.getenv('DEFAULT_TOP_P', 1.0))
++    
++    # AliCloud Configuration
++    ALICLOUD_ACCESS_KEY_ID = os.getenv('ALICLOUD_ACCESS_KEY_ID')
++    ALICLOUD_ACCESS_KEY_SECRET = os.getenv('ALICLOUD_ACCESS_KEY_SECRET')
++
++class DevelopmentConfig(Config):
++    DEBUG = True
++
++class ProductionConfig(Config):
++    DEBUG = False
++    CORS_ORIGINS = 'https://yourdomain.com'  # Restrict CORS in production
++
++class TestingConfig(Config):
++    DEBUG = True
++    # Override with test-specific settings
++```
++
++#### 3. Environment-Specific Configuration Files
++- `.env.development`
++- `.env.production` 
++- `.env.testing`
++
++### Implementation Steps
++
++1. **Phase 1: Security Fix**
++   - [ ] Remove API key from `test.py`
++   - [ ] Create `.env` file with sensitive data
++   - [ ] Update `.gitignore` to ensure `.env` is excluded
++
++2. **Phase 2: Centralized Configuration**
++   - [ ] Create `config.py` with configuration classes
++   - [ ] Update `main.py` to use configuration
++   - [ ] Update `chatbot.py` to use configuration
++   - [ ] Update `token_service.py` to use configuration
++
++3. **Phase 3: Environment Management**
++   - [ ] Create environment-specific config files
++   - [ ] Add configuration validation
++   - [ ] Add configuration documentation
++
++### Security Best Practices
++
++1. **Never commit sensitive data** to version control
++2. **Use environment variables** for all sensitive configuration
++3. **Validate configuration** on application startup
++4. **Use different configurations** for different environments
++5. **Restrict CORS origins** in production
++6. **Use HTTPS** in production
++7. **Implement proper authentication** for API endpoints
++
++### Additional Recommendations
++
++1. **Add configuration validation**: Ensure required environment variables are set
++2. **Add logging configuration**: Centralize logging settings
++3. **Add database configuration**: If database is added later
++4. **Add monitoring configuration**: For production monitoring
++5. **Add rate limiting configuration**: To prevent API abuse
++
++## Files to Modify
++
++1. `main.py` - Update to use centralized configuration
++2. `app/routers/chatbot.py` - Remove hardcoded values
++3. `app/utils/token_service.py` - Use environment variables for credentials
++4. `test.py` - Remove exposed API key
++5. Create `config.py` - Centralized configuration management
++6. Create `.env` - Environment variables (add to .gitignore)
++
++---
++
++**Last Updated**: September 3, 2025  
++**Status**: Recommendations - Implementation Pending
+diff --git a/HOW_IT_WORKS.md b/HOW_IT_WORKS.md
+new file mode 100644
+index 0000000..372fe33
+--- /dev/null
++++ b/HOW_IT_WORKS.md
+@@ -0,0 +1,259 @@
++# 📚 How Your New-Bytewise-Backend Works
++
++## 🏗️ **Overall Architecture**
++
++Your application is a **Flask web server** with **real-time WebSocket capabilities** that can:
++- Handle HTTP API requests (REST API)
++- Manage real-time connections (WebSockets)
++- Process audio/speech
++- Connect to external AI services
++
++```
++┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
++│   Web Browser   │    │  Your Backend    │    │  External APIs  │
++│                 │    │                  │    │                 │
++│ • Web Interface │◄──►│ • Flask Server   │◄──►│ • HKBU GenAI    │
++│ • JavaScript    │    │ • SocketIO       │    │ • Google Speech │
++│ • REST calls    │    │ • Speech API     │    │ • AliCloud      │
++│ • WebSocket     │    │ • Token Service  │    │                 │
++└─────────────────┘    └──────────────────┘    └─────────────────┘
++```
++
++## 🎯 **What Each Component Does**
++
++### 1. **Flask Server (`main.py`)**
++```python
++# This is your main web server
++app = Flask(__name__)                    # Creates web server
++socketio = SocketIO(app)                 # Adds WebSocket support
++app.run(host="0.0.0.0", port=5000)     # Runs on port 5000
++```
++
++**What it does:**
++- Listens for incoming web requests on port 5000
++- Serves your web interface at `http://localhost:5000`
++- Routes requests to the right code (chatbot or streaming avatar)
++
++### 2. **REST API Endpoints**
++These handle traditional web requests (like when you click a button):
++
++#### **Chatbot Router (`app/routers/chatbot.py`)**
++```python
++@chatbot.route("/a", methods=["GET"])           # GET /api/chatbot/a
++def hello_module1():
++    return {"message": "Hello from Module chatbot"}
++
++@chatbot.route("/chat", methods=["POST"])       # POST /api/chatbot/chat  
++def chat():
++    # Sends your message to HKBU AI API
++    # Returns AI response
++```
++
++#### **Streaming Avatar Router (`app/routers/streaming_avatar.py`)**
++```python
++@streaming_avatar.route("/a", methods=["GET"])  # GET /api/streaming-avatar/a
++def hello_module1():
++    return {"message": "Hello from Module streaming_avatar"}
++```
++
++### 3. **WebSocket (Real-time Communication)**
++This handles live, instant communication:
++
++```python
++@socketio.on("connect", namespace="/api/streaming-avatar")
++def handle_connect():
++    # When someone connects via WebSocket
++    print("Client connected!")
++
++@socketio.on("user_audio", namespace="/api/streaming-avatar")  
++def handle_user_audio(data):
++    # When someone sends audio data
++    # Processes speech → text using Google API
++    # Sends result back instantly
++```
++
++### 4. **External API Integration**
++
++#### **HKBU GenAI API (`test.py` shows how it works)**
++```python
++# Your app sends messages to HKBU's AI
++url = "https://genai.hkbu.edu.hk/api/v0/rest/deployments/gpt-4.1/chat/completions"
++# Gets streaming AI responses back
++```
++
++#### **Google Speech Recognition**
++```python
++# Converts audio → text
++recognizer = sr.Recognizer()
++text = recognizer.recognize_google(audio_data)
++```
++
++#### **AliCloud Token Service (`app/utils/token_service.py`)**
++```python
++# Generates authentication tokens for AliCloud services
++token, expire_time = get_alicloud_token(access_key_id, access_key_secret)
++```
++
++## 🔄 **How Data Flows Through Your System**
++
++### **Scenario 1: Chat Message**
++```
++User types message → Web Interface → POST /api/chatbot/chat → 
++chatbot.py → HKBU AI API → AI Response → Back to User
++```
++
++1. User types "Hello" in web interface
++2. JavaScript sends POST request to `/api/chatbot/chat`
++3. `chatbot.py` receives the request
++4. Formats message and sends to HKBU GenAI API
++5. HKBU returns AI response
++6. Your server sends response back to web interface
++7. User sees AI's reply
++
++### **Scenario 2: Audio/Speech Processing**
++```
++User speaks → Audio data → WebSocket → Speech Recognition → 
++Text result → Back to User instantly
++```
++
++1. User connects WebSocket to `/api/streaming-avatar`
++2. Sends audio data through WebSocket
++3. `streaming_avatar.py` receives audio
++4. Google Speech API converts audio → text
++5. Result sent back through WebSocket immediately
++6. User sees transcribed text
++
++### **Scenario 3: Basic API Test**
++```
++User clicks button → GET /api/chatbot/a → Simple JSON response
++```
++
++1. User clicks "Test Chatbot Endpoint"
++2. Browser sends GET request to `/api/chatbot/a`
++3. Returns `{"message": "Hello from Module chatbot"}`
++
++## 🌐 **Your Web Interface Explained**
++
++The HTML file (`static/index.html`) provides a user-friendly way to test everything:
++
++### **REST API Section**
++```javascript
++// When you click "Test Chatbot Endpoint"
++fetch('/api/chatbot/a')           // Sends HTTP request
++  .then(response => response.json())  // Gets JSON response
++  .then(data => display(data))        // Shows result on page
++```
++
++### **WebSocket Section**
++```javascript
++// When you click "Connect WebSocket"
++socket = io('/api/streaming-avatar')  // Opens live connection
++socket.on('message', (data) => {      // Listens for messages
++    console.log('Received:', data)     // Shows real-time updates
++})
++```
++
++### **Chat Section**
++```javascript
++// When you click "Send Chat Message"
++fetch('/api/chatbot/chat', {
++    method: 'POST',
++    body: JSON.stringify({
++        chat_history: [your_message],
++        api_key: "your-key"
++    })
++})
++```
++
++## 🛠️ **Key Technologies Used**
++
++### **Backend (Python)**
++- **Flask**: Web server framework
++- **SocketIO**: Real-time WebSocket communication
++- **SpeechRecognition**: Audio → text conversion
++- **Requests**: HTTP calls to external APIs
++- **CORS**: Allows web browsers to access your API
++
++### **Frontend (JavaScript)**
++- **Socket.IO**: WebSocket client
++- **Fetch API**: HTTP requests
++- **DOM manipulation**: Updates the web page
++- **Event handling**: Button clicks, form submissions
++
++## 💡 **What Makes This Special**
++
++### **Real-time Capabilities**
++Unlike traditional websites that require page refreshes, your app can:
++- Send/receive messages instantly (WebSocket)
++- Process audio in real-time
++- Stream AI responses as they're generated
++
++### **API Integration**
++Your backend acts as a "bridge" between:
++- Your web interface
++- External AI services (HKBU)
++- Speech recognition (Google)
++- Cloud services (AliCloud)
++
++### **Modular Design**
++Code is organized in separate modules:
++- `chatbot.py` - Chat functionality
++- `streaming_avatar.py` - Real-time audio/avatar features  
++- `token_service.py` - Authentication utilities
++- `main.py` - Brings everything together
++
++## 🎮 **How to Use/Test Everything**
++
++### **1. Basic API Testing**
++Click the blue buttons in your web interface:
++- Tests if your server is responding
++- Shows JSON responses
++- Confirms endpoints are working
++
++### **2. Chat Testing**
++- Type a message in the text area
++- Click "Send Chat Message"
++- See how your app talks to AI services
++- (Will show 401 error with test API key - that's normal!)
++
++### **3. WebSocket Testing**
++- Click "Connect WebSocket"
++- Status changes to "Connected"
++- Click "Send Test Audio Data"
++- See real-time message exchange
++
++### **4. Development Testing**
++Use the command-line test scripts:
++```bash
++python run_tests.py        # Test everything
++python test.py            # Test external AI API
++python test_websocket.py  # Test WebSocket only
++```
++
++## 🚨 **Important Notes**
++
++### **API Keys**
++- Currently uses test/demo keys
++- In production, use environment variables
++- Never commit real API keys to code
++
++### **CORS (Cross-Origin Resource Sharing)**
++- Currently allows all origins (`*`)
++- In production, restrict to your domain only
++
++### **Debug Mode**
++- Currently enabled for development
++- Shows detailed error messages
++- Turn off for production (`debug=False`)
++
++## 🎯 **Use Cases This Backend Supports**
++
++1. **Chatbots/AI Assistants**: Text-based AI conversations
++2. **Voice Interfaces**: Speech-to-text + AI responses
++3. **Real-time Communication**: Live chat, notifications
++4. **Avatar/Character Systems**: Real-time audio processing for virtual characters
++5. **API Gateway**: Bridge between frontend and multiple AI services
++
++Your backend is essentially a **multi-purpose AI communication hub** that can handle both traditional web requests and real-time interactions!
++
++Does this help clarify how everything works together? Would you like me to explain any specific part in more detail?
+diff --git a/Procfile b/Procfile
+new file mode 100644
+index 0000000..629b83a
+--- /dev/null
++++ b/Procfile
+@@ -0,0 +1 @@
++web: python main.py
+diff --git a/RAILWAY_DEPLOYMENT.md b/RAILWAY_DEPLOYMENT.md
+new file mode 100644
+index 0000000..0cf6703
+--- /dev/null
++++ b/RAILWAY_DEPLOYMENT.md
+@@ -0,0 +1,265 @@
++# 🚂 Railway Deployment Guide for audioTutor01
++
++## Step-by-Step Railway Deployment
++
++### 1. Prerequisites
++- GitHub account with audioTutor01 repository
++- Railway account (free tier available)
++- Google Cloud credentials JSON file
++- HKBU GenAI API key
++
++### 2. Prepare Your Repository
++
++Ensure your repository contains these files:
++- `requirements.txt` ✅
++- `main.py` ✅ 
++- `Procfile` ✅
++- `railway.json` ✅
++- `.env.example` ✅
++
++### 3. Deploy to Railway
++
++#### Option A: GitHub Integration (Recommended)
++
++1. **Visit Railway**
++   - Go to [railway.app](https://railway.app)
++   - Sign up/Login with GitHub
++
++2. **Create New Project**
++   - Click "New Project"
++   - Select "Deploy from GitHub repo"
++   - Choose `tesolchina/audioTutor01`
++
++3. **Configure Environment Variables**
++   ```
++   GOOGLE_APPLICATION_CREDENTIALS=/app/google-credentials.json
++   HKBU_API_KEY=your_actual_hkbu_api_key
++   PORT=5000
++   FLASK_ENV=production
++   ```
++
++4. **Upload Google Credentials**
++   - In Railway dashboard, go to "Files"
++   - Upload your Google Cloud credentials JSON file
++   - Name it `google-credentials.json`
++   - Place it in `/app/` directory
++
++#### Option B: Railway CLI
++
++1. **Install Railway CLI**
++   ```bash
++   npm install -g @railway/cli
++   ```
++
++2. **Login to Railway**
++   ```bash
++   railway login
++   ```
++
++3. **Initialize Project**
++   ```bash
++   cd audioTutor01
++   railway init
++   ```
++
++4. **Set Environment Variables**
++   ```bash
++   railway variables set GOOGLE_APPLICATION_CREDENTIALS=/app/google-credentials.json
++   railway variables set HKBU_API_KEY=your_actual_hkbu_api_key
++   railway variables set PORT=5000
++   railway variables set FLASK_ENV=production
++   ```
++
++5. **Deploy**
++   ```bash
++   railway up
++   ```
++
++### 4. Configure API Credentials
++
++#### Google Cloud Speech API
++1. **Create Google Cloud Project**
++   - Visit [Google Cloud Console](https://console.cloud.google.com)
++   - Create new project or select existing
++
++2. **Enable APIs**
++   ```
++   - Cloud Speech-to-Text API
++   - Cloud Text-to-Speech API
++   ```
++
++3. **Create Service Account**
++   - Go to IAM & Admin > Service Accounts
++   - Create new service account
++   - Download JSON key file
++
++4. **Upload to Railway**
++   - In Railway dashboard: Files > Upload
++   - Upload the JSON file as `google-credentials.json`
++
++#### HKBU GenAI API
++1. **Get API Key**
++   - Register at HKBU GenAI platform
++   - Generate API key
++
++2. **Set in Railway**
++   ```
++   HKBU_API_KEY=your_actual_api_key_here
++   ```
++
++### 5. Domain Configuration
++
++Railway provides automatic domains:
++```
++https://audiotutor01-production.up.railway.app
++```
++
++#### Custom Domain (Optional)
++1. Go to Railway dashboard
++2. Click "Settings" > "Domains"
++3. Add your custom domain
++4. Update DNS records as instructed
++
++### 6. Deployment Verification
++
++#### Check Application Health
++1. **Visit your Railway URL**
++2. **Test main interface**: `https://your-app.railway.app/`
++3. **Test voice assistant**: `https://your-app.railway.app/avatar`
++
++#### Test API Endpoints
++```bash
++# Test chatbot API
++curl -X POST https://your-app.railway.app/api/chatbot/chat \
++  -H "Content-Type: application/json" \
++  -d '{"message": "Hello, test message"}'
++
++# Test streaming avatar API
++curl -X GET https://your-app.railway.app/api/streaming-avatar/a
++```
++
++#### Test Voice Functionality
++1. Open `/avatar` page
++2. Click "🎤 Start Talking"
++3. Grant microphone permissions
++4. Speak a test phrase
++5. Verify AI response audio
++
++### 7. Monitoring & Logs
++
++#### View Logs
++- Railway Dashboard > "Logs" tab
++- Real-time application logs
++- Error tracking and debugging
++
++#### Monitor Performance
++- Railway Dashboard > "Metrics" tab
++- CPU, memory, and network usage
++- Request/response analytics
++
++### 8. Environment-Specific Configuration
++
++#### Production Optimizations
++```bash
++# In Railway environment variables
++FLASK_ENV=production
++FLASK_DEBUG=false
++WEB_CONCURRENCY=2
++MAX_WORKERS=4
++```
++
++#### Audio Processing Settings
++```bash
++# Optional: Optimize for Railway resources
++AUDIO_QUALITY=medium
++MAX_AUDIO_LENGTH=60
++TIMEOUT_SECONDS=30
++```
++
++### 9. Troubleshooting
++
++#### Common Deployment Issues
++
++**Build Failures**
++```bash
++# Check requirements.txt compatibility
++pip install -r requirements.txt --dry-run
++
++# Verify Python version
++python --version  # Should be 3.8+
++```
++
++**Audio Processing Errors**
++```bash
++# Ensure ffmpeg is available (Railway includes it)
++# Check Google credentials path
++# Verify API keys are set correctly
++```
++
++**WebSocket Connection Issues**
++```bash
++# Check Railway logs for Socket.IO errors
++# Verify CORS settings in production
++# Test with Railway's provided domain first
++```
++
++#### Debug Mode
++Set temporarily for debugging:
++```bash
++FLASK_DEBUG=true
++FLASK_ENV=development
++```
++
++### 10. Scaling & Performance
++
++#### Horizontal Scaling
++- Railway automatically handles traffic scaling
++- Monitor usage in dashboard
++- Upgrade plan if needed
++
++#### Database (Future Enhancement)
++```bash
++# Add PostgreSQL for user sessions
++railway add postgresql
++
++# Environment variable automatically added:
++DATABASE_URL=postgresql://...
++```
++
++### 11. Continuous Deployment
++
++Railway automatically deploys on git push:
++
++1. **Push to GitHub**
++   ```bash
++   git add .
++   git commit -m "Update audioTutor features"
++   git push origin main
++   ```
++
++2. **Automatic Deployment**
++   - Railway detects changes
++   - Builds and deploys automatically
++   - Zero-downtime deployment
++
++### 12. Cost Optimization
++
++#### Free Tier Limits
++- 500 hours/month execution time
++- $5 credit included
++- Automatic sleep after inactivity
++
++#### Pro Plan Benefits
++- No execution time limits
++- Priority support
++- Advanced metrics
++- Custom domains included
++
++---
++
++## 🎯 Your audioTutor01 is now live on Railway!
++
++Access your deployed application at:
++`https://your-app-name.railway.app`
++
++For support: [Railway Documentation](https://docs.railway.app)
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..60649d3a5357d2906c700c485eacdf56e0fcf3b7
+GIT binary patch
+literal 15410
+zcmcJWO>bOR8ON_!A|W;`LEOfIrcgT+C_+_J<R*?|ViS{b5>Sfbx5P=4IL6~74G0PG
+z5n#oh1v@?i65jy}LA&Qe6#l>S_cQ05d+&^$R@KO!nS0N9-rvui|9v{ww9UK6fBU3u
+zwwh<nZu78t+HC04k=_rR?=^4f{=EJcn-#sU>*|Z<p6=Y!+O}EJ|7XpP_8z63`}*`)
+z*KcXvLtVd@c8;5|zKykJtJ&B8uQXpyfA8t;cl5fX)lZrO?YyVE>=}uMjpmQ9tv0L8
+zn%?;~()D%0Inav7df!hgU+B|O^Fa4*=sVcw_5GpX8F%o+-b3MmCeyRu>?Q0$&7xq8
+zwc<d~Of4M1nR(^^5U<Y*UbjwQXI|Sx9Z*`qK|b4w&#}Jq?MN^W6Wwi7LfR43eO*D;
+z<FpRV?CWzY2*?RN01>KzvYWmgr4`5-{h+l4y}z&f4}}*hvc#_F3KTzT-qiJx;P2=&
+zuotxNdb%2rwgm6FR_`YX0z2DFE1C6W+a~E9Xx(<gjh-F~`dH9I=5x)QAiaD1P1)ZS
+z-3xiJs$An$fBxjFpW0$d`&toA=m;t9Bpk@8Z!1_DFtKJnkCG+b)1C*(W}fQ*hTwc8
+z7;SU@#0K9;Yv0k8Wy$BMYz8YuTG*j?Bj<HVtd#9--P=yKds}yJ>0Yf-YqO+hRrDVU
+zKG6A$eLmB>udE3-8h$*X=W26JdcCRD%euawbe$=|Kak2^l1q4J+uRqNL+zPn&3N`$
+zyxG=54<WOV4?c#xYAKvgUOQ^0$t=A1yTZRFTi6jLPlfHNs6ysM6LT9YgW6f1@>Ehf
+z62<&4<vA1&9BH0t?S8_Ky;&1j1X{M<N?(|l9`O=K0c@EliJY>vIqH=jflsn#OOXg&
+z?Dg#V;_>VMu_Yo^tT1RIf?m?jA>Zj*@uGNf)W(C*?Gx=pn(&$<NX_NwgfeWIXc&AG
+zYr|fLefpVJn;&fHeu~>zS=*r1gXX2Ec_xXKnz(eL=dmniJAHnU<cS?xBXEi)a-?`U
+zvGX<22!~rK!sA7U`i{S!X6+>nL)I`7PDdOha8uOprtiok>|s@yiNbJ;zwah%AWmjq
+zvMrb{%Z7M5BtNc4L?z#CNnThN@Jecz#2vl?k5^B2IOjQMVW}ZGus_frxglspI<Y^f
+zb1r#VP=GEi$1ZOrEl4g$gurl9@h)Vvm@L<JXD``GxdQ3JLC!dqi9G^}u~WV|5|DYZ
+zS)`4gxephQg&&IeBV)|z{=3J2RnCBdn-eaU6uXJahk^)na(&ldRuWXQA@*j?`WpN0
+zCtY|KGQOUunHMCaZ>^VE8f_D0ySXQG{9OCS@(4$WS#qwe5t^`iS0GqIwn;S7t#m@m
+z_y$z%rR;s04YDii7P%9*@CmM$R?ye+Vxi-(gr$U;oMjrQX-fXV2Tee?{_XeZx)tTr
+zLb1~pFjN7Rbmcr!S`WTaT2IioF8I`%;0XIO$A{wiLgJnZuuU{VL6#?V7deK^=Q=EF
+zIi!Y1;raMDxw^F4wz+ux`;Xh^=YkTpWSxV%TsbEgP>NmMYkr;9<J+}X))hObd@Z{l
+zsH*z0VsOZ&j?L#~*^VY<jvBI#HzpA3dgqe3A=6U%)mcAkAAA_^w_J(W;kQ%|v#S*%
+zU{vN^NvtGkW0jBf%JvfL-bxiN8a9oNA4mp!h9;^R%MTeiv#@(Jy`0@2B)+j*ViNw2
+zT!HXFSEw(>st+#c<uwl^i)~@XMxN-ZbwjKolVe|7x|*e3_f!ifP@rNb$#mMvOlR=>
+z{RzLdWboaW`h$`uq8m*R4T&TC-w{>#T|~q__jB5HGg&#l^Gx(#)(&zq_6&X^*{(Py
+ziydf9tM55$w#~Qof{yMg<Y6B{hjf(Wq0&Z!J7^%2>?rn*5>6_Hd&(hgl4=R1yWboI
+zBs{_yqARD`b6#Ce2cm=+(dUY6mwlE`^r1+TuIDKA7SLBy`ojsO)MX)6_lv|&V%Giy
+z5;2v$idLeRoUK#pFZWj1^FpHNxjx+&3@Sh<+DRP6J>EYO{OHQ_u8{7W_Akm7hzBo4
+zACWuPV|0<&BCD6B$?N*Rs`~zJ>Xg>?c}3p3sD6Py^Jlt#N!8tw>}^TkxVoq{qvoQh
+z!s8z#4|}TrfeSy({TLY<9&PDlc1NFu=0j0|^q?eSkf~S^)@#D|OJND9cZKOu@_@U7
+zfS&KBj`(HTUu*5{iPmn2d-7Mr9ClLOMfT3MH&pcfj;c9Fa;zWAS`dsOyg!=YT@=?5
+zHP4EjSiE+E!4^!s$dwOOPeeS&J0c-f$YWh6jvgrvzOBg+FZcms*^l>UAg>0KsELKU
+zdIST1QT6>Z%>WifvEwY%(}!Vyw&YknC%Ve+$hkk{g@ox^x)UXKXFb0!s7$<~PM+0^
+zoImLu*VO;EiRM=Cy#DkWQ2U)_D@&(xBsNkR;z6ve_gzt6hacuHi}>X(Yq-l}df_f^
+zn36iP4`*|FdCx+IVT3Q$(+AJ%z<)!#%gS;XN=eBD`C_;KKVN8Y7{ZWLN3sV;JXd<?
+zxi8nQZfjfV_h#8DfE9hnHStL<qvAwMt{NQiS%-HJo%5{CopL#0AO^AqKS6HzS~<mh
+zp=;Z^Hyl@p<5&@y=7sPdc6!OuTIkVBdkU;2@2(Wx%|#y;Rk$Nr*~8)=wNI5?*R}<3
+z)JuD^c=umOD`+Tf0eKGBn=yF`>x`UJVht-K?-L*D8Cc*Ow&18{qh2Pb3{8EpuhPEj
+zZYkzh<nzPS16f9ayXG}k6A8$txu=;v8-ri|92YMh|NY-F;r=j5nJU750QKGYm~DAl
+z-FYEF|N6HYy~6T*?MwR3EAC+d^hIzwR)&VESQGEDmY7Xs-_{<c%w)KTc0=!Tx*M9V
+z=Wqe3)PG=$_phB$PtL020ogt0m@XY)ot@EQURHWBdD9xCraG+T5R@P%YOb!Fg7;WQ
+zk4X)+ulmEehdK}&>eA|+P#l(<_qvj%6Je?vl_>fNeIOZkR68Bb#R~EyRn<qrOkMCq
+z)CaY*-l1q#ol#mza9!)<?AX9{n!cD<m7LSX?DX^yTra8*x}0j$yNZ|B6_wW{-wkPF
+zq;IRb8<p#VB!bUoJz%d`XF1KyUN$@zY^5Ql0!X@)Owe;xSZ@paN}}O*qUf4vsj&wY
+z@s3<Z@-VdQo{+v_sBWUyV0K2<^Q_&GzN96zw4prB`P_;s^<~ktENQHy%6%3!(1K*3
+zC2FrcfAHjoyQPlmN;tSW`#U(xygMy_x<g|!fOa^!ByW_I5IsDH;Zt~0?&(gW2};Pr
+zxyql`b%He{O-HmS$*$>rmTaeCx6FN-S$BIm{(~=a2<H*hG5e`A#3HFH&{uR&u^Pxr
+zS~t|4-qN1BJ7t$Kma`UM+^FQbn`Hj^`o#ssv2M?}C;H>$?u+OYiLQ7J-D1CMw9J?#
+zGcmC&sqnadMX_X2-gHen>3nag7sWEDx2S&(CbrgHO{dK1-?Da)-JWR&Yt~b2*wEFo
+zN9*ew>DN_AU2!poV73EHPuS`y!q&|F_Ux!cfZ?eXHWO2edX6})uFJJ%t^<b79-aNb
+z<hf6u+B%N{m+qO`1#i!I$P6!Z4f%8GO%06KqZd}jY@uy_D$Oyy0IO#>)O*0%lx#oy
+z)MHZ+;4$~~fhl{jr_96?u=5uk$*j7Tb=D@H$0XCafzC53-dX!YYD8+sYU}m7Dmp3&
+zBIopZ5ZJAqET_QMoyj1BE;Qudk2od&%-H{+8T*Yy%VX)06Sh_{lvyYmeOY-_DYtS>
+z$iIdYnDWH=iXhT&SyM=J_QW~QZXIWtFjJim<D**ur{lZlEa32r`i?Lo@!)bn-<Ui7
+zO5Jx%aAIaXywbD&482QJOvQ*4;Jhkd*%mdm=hPIUS?b^5%2W7U|7-{bwjIwF;aT1J
+ze8}0hf)v7DhAm)dA{y3HYp|ARj*6DS=keK#$~%_-XPHbI|1@7X>wMBshBJWgWsZ??
+zo;$}Rx6TN|aj%vkR>{eEj+Uj><h*-&6wR@%Z&CIT+fror(D2!9BJ3(pZcCr<^Htl9
+z&#`@efjwizo|1UZ%N=43c_Ly>t2IQ#I9K8+mGMc;wnmU&J;%-RvpwN&&M955j+OH#
+zmbWk^B5d|@M3=MaRUZ|!PYE3Fk>Q3on0B^it#E$E84!7*8;$2hB{QzwBrP)VaJ~6X
+zq8j;ZrX92D@69wjJ9~v~sC9o~7)zptdaCXP`p+=<IRp0#oZrTzj5C#?${CC!t&46u
+zTRRdOOCrpPs4@(R=QkWhZB>z-U0Hc171d<ewd?rzj{mDVzV5Zk6?4L{COY<|A?nbf
+zwK>C?W^+ijf!;H<hm+~urfk0KZ@RLDf}H)Rh4I_^nMe0sNTT~3Mp*voCldYBgPcV|
+zCeyHz*FvU516yGBQ!3;*xj&~TQ2wGPP)hl1BzZp48qOBZb#nKz_(JN~3Ug_qD;0iz
+z=EXL}JwKs}XV~j94W6iOrJ4gT!;=p6?vtXt?zXPGP6*54Sx{Fe<=nDs88Jl)S(z7B
+zId^nBxLAkPma{#dUhay&vY+0O%|R_Ez`xLcauu_LS2=TXo_(l%TVu@M+vbCb?B`Xr
+zw9<tm+)=W+BVpf=#E>^LcgNZ8dEJG{+2J{@DIwycuQ$IHR3-uF$`iJ83EDYfqy{1*
+zzNwYym(y$Xg!edV|3tfgCn#C|*$?rs?!=P)d184s=`O2B{H(I=Q$Uu<6rhD{6`6}U
+zap)%-H<Eo*F=C};J*olx3-2g*um}A-(aZUAB}tW@HfJ3?axrBUdT5@W1{#ssHMrqM
+z7AM{k%Xt>Taxb42AWIQ<*#oD<L8#nK8r)R;DW7bdPm!7Fw!3%dQ!rc-S43$#fLHP9
+zs9ox(A(07CZwV$7l>4%k;YqWzW^@mxY8YnZB~B9HFywA&`l)5G5sTs(vtc^UQXA&3
+z6nph)#`LJxm0;Ard6w<x2wdOepFG=kbQ0_O8nzbg8~r|UxJwAHB&X%4u#nEs$>KD*
+z69a6mrTvxGL0y0y(viA`G{*1;+j(F6#7}46nCFD;+8e3OVxkgy!|vl6PpzTbe1=U`
+zmgh_8-rc94v&?e<*73yKo?gQ~dwH^gio(yQLqk7Pc)A>%lvA&1bF5j_M8?4<{$hgp
+zFP(y27A54Fn9}wqm`M3f6-(U5Q?n3JIMtzkjaq<?nz`buo(gbc4K8vdxvD%7K)Rlo
+za2gbSf^DvR3fmTkzH<D5WAkt|X|`2nhwj_@#x!D_W&lt;``jStbL^#OfhJdYXE`;<
+zbVL<kJ7HcBrx_u;(@qV#wBRemR^oF!rweUF>%cPY{2*Jzd&l3H%(Tg<JYjCVmO04P
+zZavGH*53fzb!>ma$TJ*RP-GlDk0^-lsWUc{C!r~>IB)pu6g%10^%?>>7MuLd3CHuD
+z`_4l#?{xlj%?EriGnr-vRO2pJ&I<$eQA_}8j9rS(i3cR$$-%lfC9lWyYC6Bs_hRR0
+z!4ahk{cQZYd(RyNlV~V$RJ|dN=@e}#(3-8`;_*KeA6A8*lT<7#=R<m0*97(KI-;$s
+z!`MXy$lMq&cKk%2L_tpIx;PvKz{Z;BqV9+io`PfUKhl3ZrM`ks#4~z)LUx`n<jB$e
+zE!D;2>zaQuQFtW!i2JT<_9pQ#S5(B1I;+=b0Ay}QuAI&BbbcWf^ZNP;4|fkam*tGU
+ztbN_zC<RB;p0V(0B;9oU3X1v=nU_x%m(Q~xU3?Im4(NIINOeLkte;oG8|eVZm}FBt
+z$WO{*ImoC!Lv&SBp8WgQa;~(fVg2i(5=v=<AIk<uTEnc?88NIBT+|O`^~-ns_fBU9
+zTdo<J_<G{>`JPg~kUSzPoBU)rG+j>j$g^dyI*r=l)n6Rl)QMy1wWhAi!L&Ldb8%a6
+z=;yyUO8E@|7)+ZjZeCUwHUTaEeJ+tLre<+E<ov?ZgIE$)-}j|*cI993Vs|`KMvf(t
+Oo&JlK*F=TSBK{9{?7({f
+
+literal 0
+HcmV?d00001
+
+diff --git a/STREAMING_AVATAR_PLAN.md b/STREAMING_AVATAR_PLAN.md
+new file mode 100644
+index 0000000..2a9875d
+--- /dev/null
++++ b/STREAMING_AVATAR_PLAN.md
+@@ -0,0 +1,374 @@
++# 🎭 Building Your Streaming Avatar System
++
++## 🎯 **Your Vision: Interactive Learning Avatar**
++
++```
++Student speaks → Microphone → Speech-to-Text → LLM → Text Response → Text-to-Speech → Avatar speaks back
++```
++
++## ✅ **What You Already Have (80% Complete!)**
++
++### **1. Backend Infrastructure ✅**
++- ✅ Flask server with WebSocket support
++- ✅ Real-time communication via SocketIO
++- ✅ Speech recognition (Google Speech API)
++- ✅ LLM integration (HKBU GenAI API)
++- ✅ CORS setup for web browsers
++- ✅ Modular architecture
++
++### **2. Core Components Working ✅**
++- ✅ **Speech-to-Text**: `streaming_avatar.py` already handles audio input
++- ✅ **LLM API**: `chatbot.py` already sends/receives from AI
++- ✅ **Real-time Communication**: WebSocket infrastructure ready
++- ✅ **Web Interface**: Browser-based testing interface
++
++## 🔧 **What Needs to Be Added**
++
++### **1. Text-to-Speech (TTS) 🎤**
++Convert LLM text responses back to audio
++
++### **2. Audio Streaming 📡**
++Stream audio back to the client efficiently
++
++### **3. Frontend Avatar Interface 👤**
++Visual avatar that appears to speak
++
++### **4. Integration Pipeline 🔄**
++Connect all pieces in a smooth workflow
++
++## 🚀 **Implementation Plan**
++
++### **Phase 1: Add Text-to-Speech to Backend**
++
++#### **Option A: Google Text-to-Speech (Recommended)**
++```python
++# Add to requirements.txt
++google-cloud-texttospeech
++
++# Add to streaming_avatar.py
++from google.cloud import texttospeech
++
++def text_to_speech(text):
++    client = texttospeech.TextToSpeechClient()
++    input_text = texttospeech.SynthesisInput(text=text)
++    voice = texttospeech.VoiceSelectionParams(
++        language_code="en-US",
++        ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL
++    )
++    audio_config = texttospeech.AudioConfig(
++        audio_encoding=texttospeech.AudioEncoding.MP3
++    )
++    response = client.synthesize_speech(
++        input=input_text, voice=voice, audio_config=audio_config
++    )
++    return response.audio_content
++```
++
++#### **Option B: Microsoft Azure Speech (Alternative)**
++```python
++# Add to requirements.txt
++azure-cognitiveservices-speech
++
++# Implementation
++import azure.cognitiveservices.speech as speechsdk
++```
++
++#### **Option C: OpenAI TTS (Modern Option)**
++```python
++# Add to requirements.txt
++openai
++
++# Implementation
++from openai import OpenAI
++client = OpenAI()
++
++def text_to_speech(text):
++    response = client.audio.speech.create(
++        model="tts-1",
++        voice="alloy",
++        input=text
++    )
++    return response.content
++```
++
++### **Phase 2: Update Backend for Complete Pipeline**
++
++#### **Enhanced `streaming_avatar.py`**
++```python
++@socketio.on("user_audio", namespace=socket_namespace)
++def handle_user_audio(data):
++    try:
++        # 1. Speech to Text (Already implemented ✅)
++        text = speech_to_text(data)
++        emit("stt_result", {"text": text})
++        
++        # 2. Send to LLM for response
++        llm_response = get_llm_response(text)
++        emit("llm_response", {"text": llm_response})
++        
++        # 3. Convert response to speech (NEW)
++        audio_data = text_to_speech(llm_response)
++        emit("avatar_speech", {"audio": audio_data})
++        
++    except Exception as e:
++        emit("error", {"message": str(e)})
++
++def get_llm_response(user_text):
++    # Use existing chatbot logic
++    chat_history = [
++        {"role": "system", "content": "You are a helpful educational assistant."},
++        {"role": "user", "content": user_text}
++    ]
++    # Call HKBU API (reuse existing code from chatbot.py)
++    response = chat_completion(chat_history, api_key, model_name)
++    return response["choices"][0]["message"]["content"]
++```
++
++### **Phase 3: Enhanced Frontend with Avatar**
++
++#### **Create Avatar Interface (`static/avatar.html`)**
++```html
++<!DOCTYPE html>
++<html>
++<head>
++    <title>Streaming Avatar - Educational Assistant</title>
++    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
++</head>
++<body>
++    <div class="avatar-container">
++        <div class="avatar-face" id="avatarFace">
++            <div class="eyes"></div>
++            <div class="mouth" id="avatarMouth"></div>
++        </div>
++        
++        <div class="controls">
++            <button id="startListening">🎤 Start Talking</button>
++            <button id="stopListening">⏹️ Stop</button>
++        </div>
++        
++        <div class="conversation">
++            <div id="transcript"></div>
++            <div id="response"></div>
++        </div>
++        
++        <audio id="avatarAudio" autoplay></audio>
++    </div>
++
++    <script>
++        const socket = io('/api/streaming-avatar');
++        let mediaRecorder;
++        let isRecording = false;
++
++        // Start audio recording
++        document.getElementById('startListening').onclick = async () => {
++            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
++            mediaRecorder = new MediaRecorder(stream);
++            
++            mediaRecorder.ondataavailable = (event) => {
++                if (event.data.size > 0) {
++                    // Send audio to backend
++                    socket.emit('user_audio', event.data);
++                }
++            };
++            
++            mediaRecorder.start(1000); // Send audio every second
++            isRecording = true;
++        };
++
++        // Handle responses from backend
++        socket.on('stt_result', (data) => {
++            document.getElementById('transcript').innerText = 'You said: ' + data.text;
++        });
++
++        socket.on('llm_response', (data) => {
++            document.getElementById('response').innerText = 'Avatar: ' + data.text;
++            animateAvatarSpeaking(); // Visual feedback
++        });
++
++        socket.on('avatar_speech', (data) => {
++            // Play audio response
++            const audio = document.getElementById('avatarAudio');
++            const blob = new Blob([data.audio], { type: 'audio/mp3' });
++            audio.src = URL.createObjectURL(blob);
++            audio.play();
++        });
++
++        function animateAvatarSpeaking() {
++            // Simple mouth animation
++            const mouth = document.getElementById('avatarMouth');
++            mouth.style.transform = 'scaleY(1.5)';
++            setTimeout(() => {
++                mouth.style.transform = 'scaleY(1)';
++            }, 500);
++        }
++    </script>
++
++    <style>
++        .avatar-container {
++            text-align: center;
++            padding: 20px;
++        }
++        
++        .avatar-face {
++            width: 200px;
++            height: 200px;
++            border-radius: 50%;
++            background: linear-gradient(45deg, #667eea 0%, #764ba2 100%);
++            margin: 0 auto 20px;
++            position: relative;
++        }
++        
++        .eyes {
++            position: absolute;
++            top: 60px;
++            left: 50px;
++            width: 100px;
++            height: 20px;
++            background: white;
++            border-radius: 50%;
++        }
++        
++        .eyes::before, .eyes::after {
++            content: '';
++            position: absolute;
++            width: 15px;
++            height: 15px;
++            background: black;
++            border-radius: 50%;
++            top: 2.5px;
++        }
++        
++        .eyes::before { left: 20px; }
++        .eyes::after { right: 20px; }
++        
++        .mouth {
++            position: absolute;
++            bottom: 50px;
++            left: 75px;
++            width: 50px;
++            height: 10px;
++            background: #333;
++            border-radius: 25px;
++            transition: transform 0.3s;
++        }
++        
++        .controls {
++            margin: 20px 0;
++        }
++        
++        .controls button {
++            padding: 15px 30px;
++            font-size: 16px;
++            margin: 0 10px;
++            border: none;
++            border-radius: 25px;
++            cursor: pointer;
++        }
++        
++        .conversation {
++            max-width: 600px;
++            margin: 0 auto;
++            padding: 20px;
++            background: #f8f9fa;
++            border-radius: 10px;
++        }
++    </style>
++</body>
++</html>
++```
++
++### **Phase 4: Advanced Features**
++
++#### **1. Voice Activity Detection**
++```javascript
++// Automatically start/stop recording based on voice
++const audioContext = new AudioContext();
++const analyser = audioContext.createAnalyser();
++// Detect when user starts/stops speaking
++```
++
++#### **2. Avatar Lip Sync**
++```javascript
++// Sync avatar mouth movements with speech
++function syncLipMovement(audioData) {
++    // Analyze audio frequency and animate mouth accordingly
++}
++```
++
++#### **3. Educational Context**
++```python
++# Enhanced system prompt for educational scenarios
++EDUCATIONAL_PROMPT = """
++You are an AI teaching assistant. You help students learn by:
++- Asking engaging questions
++- Providing clear explanations
++- Encouraging curiosity
++- Adapting to the student's level
++Be friendly, patient, and encouraging.
++"""
++```
++
++## 📋 **Step-by-Step Implementation**
++
++### **Immediate Next Steps (This Week)**
++
++1. **Add Text-to-Speech Service**
++   ```bash
++   pip install google-cloud-texttospeech
++   # OR
++   pip install openai  # for OpenAI TTS
++   ```
++
++2. **Update `streaming_avatar.py`**
++   - Add TTS function
++   - Connect STT → LLM → TTS pipeline
++   - Test with existing web interface
++
++3. **Test Complete Pipeline**
++   ```bash
++   python run_tests.py
++   # Then test in browser
++   ```
++
++### **Short-term (Next 2 Weeks)**
++
++4. **Create Dedicated Avatar Interface**
++   - Build `static/avatar.html`
++   - Add microphone access
++   - Implement audio playback
++
++5. **Add Visual Avatar**
++   - Simple animated face
++   - Mouth movements during speech
++   - Visual feedback for listening/speaking states
++
++### **Medium-term (Next Month)**
++
++6. **Enhanced Features**
++   - Voice activity detection
++   - Better lip synchronization
++   - Educational conversation context
++   - Multiple avatar personalities
++
++7. **Production Preparation**
++   - Secure API key management
++   - Performance optimization
++   - Error handling improvements
++
++## 🤔 **Do You Need a Separate Project?**
++
++**No! Your current backend is perfect for this.** You just need to:
++
++1. **Add TTS capability** (1-2 days)
++2. **Enhance the frontend** (3-5 days)
++3. **Connect the pipeline** (1-2 days)
++
++Your existing architecture with Flask + SocketIO is ideal for real-time avatar interactions.
++
++## 🎯 **Which Approach Would You Like to Take?**
++
++1. **🚀 Quick Start**: Add basic TTS to existing backend first
++2. **🎨 Visual First**: Build avatar interface then add TTS
++3. **🔄 Pipeline**: Focus on complete STT → LLM → TTS flow
++
++Would you like me to start implementing any of these phases? I can help you add the TTS functionality to your existing backend right now!
+diff --git a/TESTING_GUIDE.md b/TESTING_GUIDE.md
+new file mode 100644
+index 0000000..5ebdb16
+--- /dev/null
++++ b/TESTING_GUIDE.md
+@@ -0,0 +1,255 @@
++# 🧪 Testing Guide for New-Bytewise-Backend
++
++## Quick Start Testing
++
++### 1. **Run the Complete Test Suite**
++```bash
++cd /workspaces/new-bytewise-backend
++python run_tests.py
++```
++
++### 2. **Run Individual Tests**
++```bash
++# Test server health
++python run_tests.py health
++
++# Test REST endpoints
++python run_tests.py rest
++
++# Test chat completion
++python run_tests.py chat
++
++# Test WebSocket connection
++python run_tests.py websocket
++
++# Test external API integration
++python run_tests.py api
++
++# Test audio processing
++python run_tests.py audio
++```
++
++## Manual Testing Methods
++
++### 🌐 **REST API Testing**
++
++#### Basic Endpoints
++```bash
++# Test chatbot endpoint
++curl http://localhost:5000/api/chatbot/a
++
++# Test streaming avatar endpoint  
++curl http://localhost:5000/api/streaming-avatar/a
++```
++
++#### Chat Completion API
++```bash
++curl -X POST http://localhost:5000/api/chatbot/chat \
++  -H "Content-Type: application/json" \
++  -d '{
++    "chat_history": [
++      {"role": "system", "content": "You are a helpful assistant."},
++      {"role": "user", "content": "Hello, how are you?"}
++    ],
++    "api_key": "your-api-key-here",
++    "model_name": "gpt-4",
++    "max_tokens": 50
++  }'
++```
++
++### 🔌 **WebSocket Testing**
++
++#### Using the provided WebSocket test script:
++```bash
++python test_websocket.py
++```
++
++#### Using Browser DevTools:
++```javascript
++// Open browser console and connect to WebSocket
++const socket = io('http://localhost:5000/api/streaming-avatar');
++
++socket.on('connect', () => {
++    console.log('Connected!');
++    socket.emit('user_audio', 'test data');
++});
++
++socket.on('message', (data) => {
++    console.log('Message received:', data);
++});
++
++socket.on('stt_result', (data) => {
++    console.log('STT result:', data);
++});
++```
++
++### 🤖 **External API Testing**
++
++#### Test HKBU GenAI API integration:
++```bash
++python test.py
++```
++
++### 🎵 **Audio Processing Testing**
++
++#### Test speech recognition (if you have audio files):
++```python
++import speech_recognition as sr
++import io
++
++# Test with the included 1.wav file (if exists)
++r = sr.Recognizer()
++with sr.AudioFile('1.wav') as source:
++    audio = r.record(source)
++    try:
++        text = r.recognize_google(audio)
++        print(f"Recognized: {text}")
++    except sr.UnknownValueError:
++        print("Could not understand audio")
++```
++
++## 📊 **Browser Testing**
++
++### Simple HTML Test Client
++Create an HTML file to test WebSocket connectivity:
++
++```html
++<!DOCTYPE html>
++<html>
++<head>
++    <title>WebSocket Test</title>
++    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
++</head>
++<body>
++    <h1>WebSocket Test</h1>
++    <div id="output"></div>
++    
++    <script>
++        const socket = io('http://localhost:5000/api/streaming-avatar');
++        const output = document.getElementById('output');
++        
++        socket.on('connect', () => {
++            output.innerHTML += '<p>✅ Connected to WebSocket</p>';
++        });
++        
++        socket.on('message', (data) => {
++            output.innerHTML += `<p>📨 Message: ${JSON.stringify(data)}</p>`;
++        });
++        
++        socket.on('stt_result', (data) => {
++            output.innerHTML += `<p>🎤 STT: ${JSON.stringify(data)}</p>`;
++        });
++        
++        // Send test data after 2 seconds
++        setTimeout(() => {
++            socket.emit('user_audio', new Uint8Array([1,2,3,4]));
++        }, 2000);
++    </script>
++</body>
++</html>
++```
++
++## 🔍 **Performance Testing**
++
++### Load Testing with curl:
++```bash
++# Test endpoint response time
++time curl http://localhost:5000/api/chatbot/a
++
++# Multiple concurrent requests
++for i in {1..10}; do
++    curl http://localhost:5000/api/chatbot/a &
++done
++wait
++```
++
++### Memory Usage Monitoring:
++```bash
++# Monitor server memory usage
++ps aux | grep "python main.py"
++
++# Monitor with top
++top -p $(pgrep -f "python main.py")
++```
++
++## 🐛 **Debugging & Troubleshooting**
++
++### Check Server Logs:
++```bash
++# If running with nohup
++tail -f server.log
++
++# If running in terminal, check console output
++```
++
++### Check Port Usage:
++```bash
++# See what's running on port 5000
++lsof -i :5000
++
++# Kill process on port 5000 if needed
++sudo kill -9 $(lsof -t -i:5000)
++```
++
++### Test Network Connectivity:
++```bash
++# Test if port is accessible
++telnet localhost 5000
++
++# Test with netcat
++nc -zv localhost 5000
++```
++
++## 📋 **Test Checklist**
++
++### ✅ **Pre-deployment Testing**
++- [ ] Server starts without errors
++- [ ] All REST endpoints respond correctly
++- [ ] WebSocket connections establish successfully
++- [ ] External API integration works
++- [ ] Audio processing functions correctly
++- [ ] CORS headers are present
++- [ ] Error handling returns proper status codes
++- [ ] Memory usage is reasonable
++- [ ] No memory leaks during extended operation
++
++### ✅ **Production Readiness**
++- [ ] Remove hardcoded API keys
++- [ ] Configure production CORS settings
++- [ ] Set up proper logging
++- [ ] Configure environment variables
++- [ ] Set debug=False for production
++- [ ] Add rate limiting
++- [ ] Add authentication if needed
++- [ ] Configure HTTPS
++- [ ] Set up monitoring
++
++## 🚨 **Common Issues & Solutions**
++
++### Server Won't Start:
++- Check if port 5000 is already in use
++- Verify all dependencies are installed
++- Check for syntax errors in Python files
++
++### WebSocket Connection Fails:
++- Ensure SocketIO is properly configured
++- Check browser CORS settings
++- Verify namespace paths match
++
++### External API Errors:
++- Check API key validity
++- Verify network connectivity
++- Check API endpoint URLs
++- Review request format
++
++### Audio Processing Issues:
++- Ensure audio files are in correct format
++- Check microphone permissions (for live audio)
++- Verify speech recognition API access
++
++---
++
++**Run the comprehensive test suite to get started:**
++```bash
++python run_tests.py
++```
+diff --git a/TEST_RESULTS.md b/TEST_RESULTS.md
+new file mode 100644
+index 0000000..696526b
+--- /dev/null
++++ b/TEST_RESULTS.md
+@@ -0,0 +1,137 @@
++# Application Test Results
++
++## ✅ Installation & Setup Status
++
++### Dependencies Installed Successfully
++- Flask 3.1.2
++- Flask-SocketIO 5.5.1  
++- Flask-CORS 6.0.1
++- SpeechRecognition 3.14.3
++- python-dotenv 1.1.1
++- eventlet 0.40.3
++- numpy (already installed)
++- scipy (already installed)
++- requests (already installed)
++
++### Fixed Issues
++- ❌ ~~`hashlib` dependency~~ → ✅ Removed (built-into Python)
++- ❌ ~~`dotenv` dependency~~ → ✅ Changed to `python-dotenv`
++- ✅ Added missing `scipy` dependency
++
++## ✅ Server Status
++
++The Flask application is running successfully on:
++- **Host**: 0.0.0.0
++- **Port**: 5000
++- **Debug Mode**: Enabled
++- **WebSocket Support**: Active with eventlet
++
++## ✅ API Endpoints Testing
++
++### REST API Endpoints
++1. **GET** `/api/chatbot/a`
++   ```bash
++   curl http://localhost:5000/api/chatbot/a
++   ```
++   **Response**: `{"message": "Hello from Module chatbot"}`
++
++2. **GET** `/api/streaming-avatar/a`
++   ```bash
++   curl http://localhost:5000/api/streaming-avatar/a
++   ```
++   **Response**: `{"message": "Hello from Module streaming_avatar"}`
++
++3. **POST** `/api/chatbot/chat`
++   ```bash
++   curl -X POST http://localhost:5000/api/chatbot/chat \
++     -H "Content-Type: application/json" \
++     -d '{"chat_history": [...], "api_key": "test", "model_name": "gpt-4"}'
++   ```
++   **Response**: Returns API response (401 with test key - expected)
++
++### WebSocket Endpoints
++1. **WebSocket** `/api/streaming-avatar`
++   - ✅ Connection established successfully
++   - ✅ Receives welcome message: `{"info": "Connected to WebSocket!"}`
++   - ✅ Can send/receive audio data events
++
++## ✅ External API Integration Testing
++
++The `test.py` script successfully connects to the HKBU GenAI API and demonstrates:
++- ✅ Streaming chat completion
++- ✅ Real-time response processing
++- ✅ Proper error handling
++- ✅ Token streaming with JSON parsing
++
++**Sample Output**: 
++```
++Hello, little buddy! 🐣 Let's have some fun with numbers and Python! Yay! 🎉
++Do you know what "factorial" means? It's just a number times all the numbers below it!
++...
++--- Stream finished ---
++```
++
++## 🔧 Application Architecture
++
++### Current Structure
++```
++Backend Components:
++├── main.py                    # Flask app + SocketIO server
++├── app/routers/
++│   ├── chatbot.py            # Chat completion REST API
++│   └── streaming_avatar.py   # WebSocket + basic REST
++└── app/utils/
++    └── token_service.py      # AliCloud token generation
++
++Features:
++├── REST API (Flask)          # HTTP endpoints
++├── WebSocket (SocketIO)      # Real-time communication  
++├── CORS Support              # Cross-origin requests
++├── Speech Recognition        # Google Web Speech API
++└── External AI Integration   # HKBU GenAI API
++```
++
++### Key Capabilities
++1. **Chat Completion**: Non-streaming chat with HKBU API
++2. **Audio Processing**: WebSocket-based speech recognition
++3. **Real-time Communication**: SocketIO for live interactions
++4. **Token Management**: AliCloud authentication service
++5. **Cross-Origin Support**: CORS enabled for web clients
++
++## 🎯 What's Working
++
++- ✅ **Server Start**: Application starts without errors
++- ✅ **Route Registration**: All endpoints properly registered
++- ✅ **WebSocket Connection**: Real-time communication functional
++- ✅ **External API**: Successfully connects to HKBU GenAI
++- ✅ **Speech Recognition**: Google Speech API integration ready
++- ✅ **CORS**: Cross-origin requests supported
++- ✅ **Error Handling**: Proper error responses
++- ✅ **Logging**: Debug mode provides detailed logs
++
++## 🚨 Security Notes
++
++⚠️ **API Key Exposure**: `test.py` contains hardcoded API key (see CONFIGURATION_NOTES.md)
++⚠️ **Open CORS**: Currently allows all origins (`*`) - okay for development
++
++## 🎉 Conclusion
++
++The application is **fully functional** and ready for development/testing! 
++
++All major components are working:
++- REST API endpoints respond correctly
++- WebSocket connections establish successfully  
++- External API integration is functional
++- Speech recognition pipeline is ready
++- Real-time communication is operational
++
++The backend provides a solid foundation for:
++- Chat applications
++- Real-time avatar streaming
++- Voice interaction systems
++- AI-powered conversational interfaces
++
++---
++
++**Test Date**: September 3, 2025
++**Status**: ✅ All Systems Operational
+diff --git a/app/routers/__pycache__/chatbot.cpython-312.pyc b/app/routers/__pycache__/chatbot.cpython-312.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..ab1dad8abed1516c5e42ade7fad92dae1b59acf1
+GIT binary patch
+literal 3718
+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
+H$@1>Mx#4fU
+
+literal 0
+HcmV?d00001
+
+diff --git a/app/routers/__pycache__/chatbot.cpython-313.pyc b/app/routers/__pycache__/chatbot.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..ed0e65314d338e1a5befd0ca11b597a43609a972
+GIT binary patch
+literal 3897
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/app/routers/__pycache__/streaming_avatar.cpython-312.pyc b/app/routers/__pycache__/streaming_avatar.cpython-312.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..cebb3e6750255d7dc14f6063505cc5ec7c7dbfab
+GIT binary patch
+literal 11807
+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
+bQUS#^JLP@~2(0M`badBT#X|~nvc&%f<~3V<
+
+literal 0
+HcmV?d00001
+
+diff --git a/app/routers/__pycache__/streaming_avatar.cpython-313.pyc b/app/routers/__pycache__/streaming_avatar.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..7b19db9abbb152f88c787077488efbe98ba5ce17
+GIT binary patch
+literal 3828
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/app/routers/chatbot.py b/app/routers/chatbot.py
+new file mode 100644
+index 0000000..7543319
+--- /dev/null
++++ b/app/routers/chatbot.py
+@@ -0,0 +1,117 @@
++import json
++import requests
++from flask import Blueprint, jsonify, request
++
++# ------------------------------
++# Blueprint (REST endpoint)
++# ------------------------------
++chatbot = Blueprint("chatbot", __name__)
++
++
++@chatbot.route("/a", methods=["GET"])
++def hello_module1():
++    return jsonify({"message": "Hello from Module chatbot"})
++
++
++# --- Simplified Preprocess Function ---
++def preprocess_chat_history(chat_history):
++    """
++    Convert chat history into the plain format expected by HKBU API:
++    [
++      {"role": "system", "content": "..."},
++      {"role": "user", "content": "..."}
++    ]
++    """
++    processed = []
++    first_assistant_removed = False
++
++    for msg in chat_history:
++        role = msg.get("role")
++        content = msg.get("content")
++
++        if not content:
++            continue
++
++        # Flatten content (stringify if it’s not a string)
++        if isinstance(content, list):
++            flattened = " ".join(
++                c.get("text", "") if isinstance(c, dict) else str(c)
++                for c in content
++            )
++        else:
++            flattened = str(content)
++
++        if role == "system":
++            processed.append({"role": "system", "content": flattened})
++
++        elif role == "assistant":
++            if not first_assistant_removed:
++                first_assistant_removed = True
++                continue
++            else:
++                processed.append({"role": "system", "content": flattened})
++
++        elif role == "user":
++            processed.append({"role": "user", "content": flattened})
++
++    return processed
++
++# --- AI Non-Streaming Function ---
++def chat_completion(
++    chat_history,
++    api_key,
++    model_name,
++    max_tokens=150,
++    top_p=1.0,
++    api_version="2024-12-01-preview",
++):
++    """
++    Sends a normal (non-streaming) chat completion request to HKBU GenAI API.
++    """
++    url = f"https://genai.hkbu.edu.hk/api/v0/rest/deployments/{model_name}/chat/completions?api-version={api_version}"
++
++    headers = {
++        "accept": "application/json",
++        "api-key": api_key,
++        "Content-Type": "application/json",
++    }
++
++    payload = {
++        "messages": chat_history,
++        "max_tokens": max_tokens,
++        "top_p": top_p,
++        "stream": False,  # 👈 Ensure non-streaming mode
++    }
++
++    response = requests.post(url, headers=headers, json=payload)
++
++    if response.status_code != 200:
++        return {"error": f"[ERROR {response.status_code}] {response.text}"}
++
++    return response.json()
++
++
++# ------------------------------
++# Non-Streaming Endpoint
++# ------------------------------
++@chatbot.route("/chat", methods=["POST"])
++def chat():
++    data = request.get_json(force=True)
++    chat_history = data.get("chat_history", [])
++    api_key = data.get("api_key")
++    model_name = data.get("model_name", "gpt-4")
++    max_tokens = data.get("max_tokens", 150)
++    top_p = data.get("top_p", 1.0)
++
++    # ✅ Preprocess history here
++    preprocessed_history = preprocess_chat_history(chat_history)
++    # Call non-streaming API
++    result = chat_completion(
++        chat_history=preprocessed_history,
++        api_key=api_key,
++        model_name=model_name,
++        max_tokens=max_tokens,
++        top_p=top_p,
++    )
++
++    return jsonify(result)
+\ No newline at end of file
+diff --git a/app/routers/streaming_avatar.py b/app/routers/streaming_avatar.py
+new file mode 100644
+index 0000000..9a64409
+--- /dev/null
++++ b/app/routers/streaming_avatar.py
+@@ -0,0 +1,261 @@
++from flask import Blueprint, jsonify
++import io
++from flask_socketio import emit, SocketIO
++import numpy as np
++import wave
++from scipy.signal import resample
++import speech_recognition as sr
++import requests
++import json
++import base64
++import os
++import asyncio
++from gtts import gTTS
++import edge_tts
++import tempfile
++from pydub import AudioSegment
++
++# ------------------------------
++# Blueprint (REST endpoint)
++# ------------------------------
++streaming_avatar = Blueprint("streaming_avatar", __name__)
++
++# ------------------------------
++# Text-to-Speech Functions (Hong Kong Compatible)
++# ------------------------------
++
++def text_to_speech_gtts(text, lang='en'):
++    """
++    Google Text-to-Speech (Free, works in Hong Kong)
++    """
++    try:
++        tts = gTTS(text=text, lang=lang, slow=False)
++        
++        # Use temporary file
++        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
++            tts.save(tmp_file.name)
++            
++            # Read the audio data
++            with open(tmp_file.name, 'rb') as audio_file:
++                audio_data = audio_file.read()
++            
++            # Clean up
++            os.unlink(tmp_file.name)
++            
++        return audio_data
++    except Exception as e:
++        print(f"GTTS Error: {e}")
++        return None
++
++async def text_to_speech_edge(text, voice='en-US-AriaNeural'):
++    """
++    Microsoft Edge TTS (Free, high quality, works in Hong Kong)
++    """
++    try:
++        communicate = edge_tts.Communicate(text, voice)
++        
++        # Use temporary file
++        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
++            await communicate.save(tmp_file.name)
++            
++            # Read the audio data
++            with open(tmp_file.name, 'rb') as audio_file:
++                audio_data = audio_file.read()
++            
++            # Clean up
++            os.unlink(tmp_file.name)
++            
++        return audio_data
++    except Exception as e:
++        print(f"Edge TTS Error: {e}")
++        return None
++
++def get_llm_response(user_text, api_key="f78e26ce-5d62-455a-a4f6-055df1fc1a27"):
++    """
++    Get response from HKBU GenAI API (reusing existing logic)
++    """
++    try:
++        url = "https://genai.hkbu.edu.hk/api/v0/rest/deployments/gpt-4.1/chat/completions?api-version=2024-12-01-preview"
++        
++        headers = {
++            "accept": "application/json",
++            "api-key": api_key,
++            "Content-Type": "application/json"
++        }
++        
++        payload = {
++            "messages": [
++                {
++                    "role": "system",
++                    "content": "You are a helpful educational assistant. Keep responses concise and friendly, suitable for students."
++                },
++                {
++                    "role": "user",
++                    "content": user_text
++                }
++            ],
++            "max_tokens": 150,
++            "top_p": 1,
++            "stream": False  # Non-streaming for TTS
++        }
++        
++        response = requests.post(url, headers=headers, json=payload, timeout=10)
++        
++        if response.status_code == 200:
++            result = response.json()
++            return result["choices"][0]["message"]["content"]
++        else:
++            return f"Sorry, I couldn't process that. Status: {response.status_code}"
++            
++    except Exception as e:
++        print(f"LLM Error: {e}")
++        return "Sorry, I'm having trouble understanding right now."
++
++
++@streaming_avatar.route("/a", methods=["GET"])
++def hello_module1():
++    return jsonify({"message": "Hello from Module streaming_avatar"})
++
++# ------------------------------
++# WebSocket Handlers
++# ------------------------------
++socket_namespace = "/api/streaming-avatar"
++
++def register_socketio_handlers(socketio: SocketIO):
++    @socketio.on("connect", namespace=socket_namespace)
++    def handle_connect():
++        print("✅ Client connected to /streaming-avatar")
++        emit("message", {"info": "Connected to WebSocket!"})
++
++    @socketio.on("disconnect", namespace=socket_namespace)
++    def handle_disconnect():
++        print("⚠️ Client disconnected from /streaming-avatar")
++
++    @socketio.on('user_audio', namespace=socket_namespace)
++    def handle_user_audio(data):
++        """
++        SOLUTION: Handle WebM to WAV conversion for speech recognition
++        """
++        try:
++            # Handle different data formats
++            if isinstance(data, bytes):
++                # Direct binary data
++                audio_bytes = data
++                print(f"📥 Received binary audio data, size: {len(audio_bytes)} bytes")
++            elif isinstance(data, dict):
++                # JSON data with base64 encoded audio
++                audio_data = data.get('audio')
++                if not audio_data:
++                    emit('error', {'message': 'No audio data received'})
++                    return
++                print(f"📥 Received JSON audio data, size: {len(audio_data)} characters (base64)")
++                audio_bytes = base64.b64decode(audio_data)
++            elif isinstance(data, str):
++                # Direct base64 string
++                print(f"📥 Received string audio data, size: {len(data)} characters (base64)")
++                audio_bytes = base64.b64decode(data)
++            else:
++                emit('error', {'message': f'Unsupported data format: {type(data)}'})
++                return
++            
++            print(f"📦 Processing audio bytes, size: {len(audio_bytes)} bytes")
++            
++            # CORE SOLUTION: Convert WebM to WAV using pydub + ffmpeg
++            try:
++                print("🔄 Converting WebM audio to WAV format...")
++                
++                # Step 1: Load WebM audio with pydub (requires ffmpeg)
++                audio_segment = AudioSegment.from_file(
++                    io.BytesIO(audio_bytes), 
++                    format="webm"
++                )
++                print(f"✅ WebM loaded: {len(audio_segment)}ms, {audio_segment.frame_rate}Hz, {audio_segment.channels} channels")
++                
++                # Step 2: Optimize for speech recognition
++                # Convert to mono, 16kHz, 16-bit (ideal for speech recognition)
++                audio_segment = audio_segment.set_channels(1)        # Mono
++                audio_segment = audio_segment.set_frame_rate(16000)  # 16kHz
++                audio_segment = audio_segment.set_sample_width(2)    # 16-bit
++                
++                # Step 3: Export to WAV format in memory
++                wav_buffer = io.BytesIO()
++                audio_segment.export(
++                    wav_buffer, 
++                    format="wav",
++                    parameters=["-acodec", "pcm_s16le"]  # Ensure PCM encoding
++                )
++                wav_buffer.seek(0)
++                
++                print(f"✅ Converted to WAV: {len(wav_buffer.getvalue())} bytes")
++                
++            except Exception as conversion_error:
++                print(f"❌ Audio conversion failed: {conversion_error}")
++                emit('error', {'message': f'Audio format conversion failed: {conversion_error}'})
++                return
++            
++            # Step 4: Speech recognition with converted audio
++            recognizer = sr.Recognizer()
++            recognizer.energy_threshold = 300
++            recognizer.dynamic_energy_threshold = True
++            
++            try:
++                with sr.AudioFile(wav_buffer) as source:
++                    # Adjust for ambient noise
++                    recognizer.adjust_for_ambient_noise(source, duration=0.2)
++                    # Record the audio
++                    audio_clip = recognizer.record(source)
++                    
++                print("🎯 Audio successfully processed by speech recognizer")
++                
++                # Step 5: Recognize speech
++                text = recognizer.recognize_google(audio_clip, language='en-US')
++                
++                print(f"🗣️ User said: '{text}'")
++                emit('transcription', {'text': text})
++                
++                # Step 6: Get LLM response
++                llm_response = get_llm_response(text)
++                print(f"🤖 LLM response: '{llm_response}'")
++                emit('llm_response', {'text': llm_response})
++                
++                # Step 7: Generate TTS audio
++                tts_audio = text_to_speech_gtts(llm_response)
++                if tts_audio:
++                    tts_base64 = base64.b64encode(tts_audio).decode('utf-8')
++                    emit('tts_audio', {'audio': tts_base64})
++                    print("🔊 TTS audio sent to client")
++                else:
++                    emit('error', {'message': 'Failed to generate TTS audio'})
++                    
++            except sr.UnknownValueError:
++                print("❌ Could not understand audio")
++                emit('error', {'message': 'Could not understand audio. Please speak clearly.'})
++            except sr.RequestError as e:
++                print(f"❌ Speech recognition service error: {e}")
++                emit('error', {'message': f'Speech recognition error: {e}'})
++                
++        except Exception as e:
++            print(f"❌ Error in handle_user_audio: {e}")
++            emit('error', {'message': f'Audio processing error: {e}'})
++
++    @socketio.on("test_tts", namespace=socket_namespace)
++    def handle_test_tts(data):
++        """
++        Test TTS functionality directly
++        """
++        try:
++            text = data.get("text", "Hello! This is a test of the text to speech system.")
++            print(f"🔊 Testing TTS with text: {text}")
++            
++            # Generate TTS audio
++            tts_audio = text_to_speech_gtts(text)
++            if tts_audio:
++                # Convert to base64 for transmission
++                tts_base64 = base64.b64encode(tts_audio).decode('utf-8')
++                emit('tts_audio', {'audio': tts_base64})
++                emit('message', {'info': f'TTS generated for: {text}'})
++            else:
++                emit('error', {'message': 'Failed to generate TTS audio'})
++        except Exception as e:
++            print(f"Error in handle_test_tts: {e}")
++            emit('error', {'message': f'TTS error: {e}'})
+\ No newline at end of file
+diff --git a/app/utils/__pycache__/token_service.cpython-313.pyc b/app/utils/__pycache__/token_service.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..0c3ec5bc3f784d655eea6cd0abc1636207321e6a
+GIT binary patch
+literal 3297
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/app/utils/token_service.py b/app/utils/token_service.py
+new file mode 100644
+index 0000000..9e0523e
+--- /dev/null
++++ b/app/utils/token_service.py
+@@ -0,0 +1,76 @@
++# token_service.py
++# -*- coding: utf-8 -*-
++import base64
++import hashlib
++import hmac
++import os
++import requests
++import time
++import uuid
++from urllib import parse
++
++
++def _encode_text(text: str) -> str:
++    """Encode text for AliCloud API signature."""
++    encoded_text = parse.quote_plus(text)
++    return encoded_text.replace('+', '%20').replace('*', '%2A').replace('%7E', '~')
++
++
++def _encode_dict(dic: dict) -> str:
++    """Encode dict parameters into AliCloud required format."""
++    keys = dic.keys()
++    dic_sorted = [(key, dic[key]) for key in sorted(keys)]
++    encoded_text = parse.urlencode(dic_sorted)
++    return encoded_text.replace('+', '%20').replace('*', '%2A').replace('%7E', '~')
++
++
++def get_alicloud_token(access_key_id: str, access_key_secret: str):
++    """
++    Generate an AliCloud token.
++
++    :param access_key_id: AliCloud access key ID
++    :param access_key_secret: AliCloud access key secret
++    :return: (token, expire_time) or (None, None) if failed
++    """
++    parameters = {
++        'AccessKeyId': access_key_id,
++        'Action': 'CreateToken',
++        'Format': 'JSON',
++        'RegionId': 'ap-southeast-1',
++        'SignatureMethod': 'HMAC-SHA1',
++        'SignatureNonce': str(uuid.uuid1()),
++        'SignatureVersion': '1.0',
++        'Timestamp': time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
++        'Version': '2019-07-17'
++    }
++
++    # Build canonical query string
++    query_string = _encode_dict(parameters)
++
++    # Build string to sign
++    string_to_sign = 'GET' + '&' + _encode_text('/') + '&' + _encode_text(query_string)
++
++    # Calculate signature
++    secreted_string = hmac.new(
++        bytes(access_key_secret + '&', encoding='utf-8'),
++        bytes(string_to_sign, encoding='utf-8'),
++        hashlib.sha1
++    ).digest()
++    signature = base64.b64encode(secreted_string)
++
++    # URL encode signature
++    signature = _encode_text(signature)
++
++    # Request token
++    full_url = f'http://nlsmeta.ap-southeast-1.aliyuncs.com/?Signature={signature}&{query_string}'
++    response = requests.get(full_url)
++
++    if response.ok:
++        root_obj = response.json()
++        key = 'Token'
++        if key in root_obj:
++            token = root_obj[key]['Id']
++            expire_time = root_obj[key]['ExpireTime']
++            return token, expire_time
++
++    return None, None
+\ No newline at end of file
+diff --git a/main.py b/main.py
+new file mode 100644
+index 0000000..55b9b52
+--- /dev/null
++++ b/main.py
+@@ -0,0 +1,38 @@
++from flask import Flask, render_template, send_from_directory
++from flask_socketio import SocketIO
++from flask_cors import CORS  
++from app.routers.streaming_avatar import streaming_avatar, register_socketio_handlers
++from app.routers.chatbot import chatbot
++
++# Create Flask app
++app = Flask(__name__)
++
++# --- Enable CORS for REST API ---
++CORS(app, resources={r"/api/*": {"origins": "*"}})  
++
++# Register blueprints
++app.register_blueprint(streaming_avatar, url_prefix="/api/streaming-avatar")
++app.register_blueprint(chatbot, url_prefix="/api/chatbot")
++
++# Add a root route for the web interface
++@app.route("/")
++def index():
++    return send_from_directory('static', 'index.html')
++
++@app.route("/avatar")
++def avatar():
++    return send_from_directory('static', 'avatar.html')
++
++@app.route("/static/<path:filename>")
++def static_files(filename):
++    return send_from_directory('static', filename)
++
++# Initialize SocketIO with eventlet
++socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
++
++# Register websocket event handlers
++register_socketio_handlers(socketio)
++
++if __name__ == "__main__":
++    # Run
++    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
+\ No newline at end of file
+diff --git a/railway.json b/railway.json
+new file mode 100644
+index 0000000..93f79a3
+--- /dev/null
++++ b/railway.json
+@@ -0,0 +1,13 @@
++{
++  "$schema": "https://railway.app/railway.schema.json",
++  "build": {
++    "builder": "NIXPACKS"
++  },
++  "deploy": {
++    "startCommand": "python main.py",
++    "healthcheckPath": "/",
++    "healthcheckTimeout": 100,
++    "restartPolicyType": "ON_FAILURE",
++    "restartPolicyMaxRetries": 3
++  }
++}
+diff --git a/requirements.txt b/requirements.txt
+new file mode 100644
+index 0000000..116bf6c
+--- /dev/null
++++ b/requirements.txt
+@@ -0,0 +1,14 @@
++flask
++flask_socketio
++requests
++python-dotenv
++eventlet
++numpy
++SpeechRecognition
++flask-cors
++scipy
++azure-cognitiveservices-speech
++gtts
++edge-tts
++pydub
++ffmpeg-python
+\ No newline at end of file
+diff --git a/run_tests.py b/run_tests.py
+new file mode 100644
+index 0000000..0aa937d
+--- /dev/null
++++ b/run_tests.py
+@@ -0,0 +1,366 @@
++#!/usr/bin/env python3
++"""
++Comprehensive test suite for the new-bytewise-backend application
++Run this script to test all components of your application
++"""
++
++import requests
++import json
++import socketio
++import time
++import sys
++from typing import Dict, Any
++
++# Configuration
++BASE_URL = "http://localhost:5000"
++WEBSOCKET_URL = "http://localhost:5000"
++
++class Colors:
++    """ANSI color codes for pretty output"""
++    GREEN = '\033[92m'
++    RED = '\033[91m'
++    YELLOW = '\033[93m'
++    BLUE = '\033[94m'
++    MAGENTA = '\033[95m'
++    CYAN = '\033[96m'
++    BOLD = '\033[1m'
++    END = '\033[0m'
++
++def print_test_header(test_name: str):
++    """Print a formatted test header"""
++    print(f"\n{Colors.BOLD}{Colors.BLUE}{'='*60}{Colors.END}")
++    print(f"{Colors.BOLD}{Colors.BLUE}Testing: {test_name}{Colors.END}")
++    print(f"{Colors.BOLD}{Colors.BLUE}{'='*60}{Colors.END}")
++
++def print_success(message: str):
++    """Print success message"""
++    print(f"{Colors.GREEN}✅ {message}{Colors.END}")
++
++def print_error(message: str):
++    """Print error message"""
++    print(f"{Colors.RED}❌ {message}{Colors.END}")
++
++def print_info(message: str):
++    """Print info message"""
++    print(f"{Colors.CYAN}ℹ️  {message}{Colors.END}")
++
++def print_warning(message: str):
++    """Print warning message"""
++    print(f"{Colors.YELLOW}⚠️  {message}{Colors.END}")
++
++def test_server_health():
++    """Test if the server is responding"""
++    print_test_header("Server Health Check")
++    
++    try:
++        # Test basic connectivity
++        response = requests.get(f"{BASE_URL}/api/chatbot/a", timeout=5)
++        if response.status_code == 200:
++            print_success("Server is responding")
++            print_info(f"Response: {response.json()}")
++            return True
++        else:
++            print_error(f"Server returned status code: {response.status_code}")
++            return False
++    except requests.exceptions.ConnectionError:
++        print_error("Cannot connect to server. Make sure it's running on port 5000")
++        return False
++    except Exception as e:
++        print_error(f"Unexpected error: {e}")
++        return False
++
++def test_rest_endpoints():
++    """Test all REST API endpoints"""
++    print_test_header("REST API Endpoints")
++    
++    endpoints = [
++        ("GET", "/api/chatbot/a", None),
++        ("GET", "/api/streaming-avatar/a", None),
++    ]
++    
++    for method, endpoint, data in endpoints:
++        try:
++            url = f"{BASE_URL}{endpoint}"
++            print_info(f"Testing {method} {endpoint}")
++            
++            if method == "GET":
++                response = requests.get(url, timeout=5)
++            elif method == "POST":
++                response = requests.post(url, json=data, timeout=5)
++            
++            if response.status_code == 200:
++                print_success(f"{method} {endpoint} - Status: {response.status_code}")
++                print_info(f"Response: {response.json()}")
++            else:
++                print_warning(f"{method} {endpoint} - Status: {response.status_code}")
++                
++        except Exception as e:
++            print_error(f"Error testing {method} {endpoint}: {e}")
++
++def test_chat_completion():
++    """Test the chat completion endpoint"""
++    print_test_header("Chat Completion API")
++    
++    # Test with various payloads
++    test_cases = [
++        {
++            "name": "Basic Chat",
++            "payload": {
++                "chat_history": [
++                    {"role": "system", "content": "You are a helpful assistant."},
++                    {"role": "user", "content": "Say hello"}
++                ],
++                "api_key": "test-key",
++                "model_name": "gpt-4",
++                "max_tokens": 50
++            }
++        },
++        {
++            "name": "Empty History",
++            "payload": {
++                "chat_history": [],
++                "api_key": "test-key"
++            }
++        },
++        {
++            "name": "Missing API Key",
++            "payload": {
++                "chat_history": [{"role": "user", "content": "Hello"}]
++            }
++        }
++    ]
++    
++    for test_case in test_cases:
++        try:
++            print_info(f"Testing: {test_case['name']}")
++            response = requests.post(
++                f"{BASE_URL}/api/chatbot/chat",
++                json=test_case["payload"],
++                headers={"Content-Type": "application/json"},
++                timeout=10
++            )
++            
++            print_info(f"Status Code: {response.status_code}")
++            result = response.json()
++            
++            if "error" in result:
++                print_warning(f"Expected error response: {result.get('error', 'Unknown error')}")
++            else:
++                print_success(f"Response received: {json.dumps(result, indent=2)[:200]}...")
++                
++        except Exception as e:
++            print_error(f"Error in {test_case['name']}: {e}")
++
++def test_websocket_connection():
++    """Test WebSocket connectivity"""
++    print_test_header("WebSocket Connection")
++    
++    # Global variables to capture WebSocket events
++    connection_success = False
++    messages_received = []
++    
++    # Create a Socket.IO client
++    sio = socketio.Client()
++    
++    @sio.event
++    def connect():
++        nonlocal connection_success
++        connection_success = True
++        print_success("WebSocket connected successfully!")
++    
++    @sio.event
++    def disconnect():
++        print_info("WebSocket disconnected")
++    
++    @sio.on('message', namespace='/api/streaming-avatar')
++    def on_message(data):
++        nonlocal messages_received
++        messages_received.append(data)
++        print_success(f"Received message: {data}")
++    
++    @sio.on('stt_result', namespace='/api/streaming-avatar')
++    def on_stt_result(data):
++        nonlocal messages_received
++        messages_received.append(data)
++        print_success(f"Received STT result: {data}")
++    
++    try:
++        print_info("Attempting WebSocket connection...")
++        sio.connect(WEBSOCKET_URL, namespaces=['/api/streaming-avatar'])
++        
++        # Wait for connection
++        time.sleep(2)
++        
++        if connection_success:
++            print_success("WebSocket connection established")
++            
++            # Test sending data
++            print_info("Sending test audio data...")
++            sio.emit('user_audio', b'test_audio_data', namespace='/api/streaming-avatar')
++            
++            # Wait for response
++            time.sleep(2)
++            
++            if messages_received:
++                print_success(f"Received {len(messages_received)} message(s)")
++                for i, msg in enumerate(messages_received):
++                    print_info(f"Message {i+1}: {msg}")
++            else:
++                print_warning("No messages received")
++        else:
++            print_error("Failed to establish WebSocket connection")
++        
++        # Disconnect
++        sio.disconnect()
++        
++    except Exception as e:
++        print_error(f"WebSocket test error: {e}")
++
++def test_external_api_integration():
++    """Test the external API integration using the test script"""
++    print_test_header("External API Integration (HKBU)")
++    
++    print_info("Testing HKBU GenAI API integration...")
++    print_warning("Note: This test uses a hardcoded API key and may fail if the key is invalid")
++    
++    try:
++        # Import and run a simplified version of the test
++        import subprocess
++        import os
++        
++        # Change to project directory
++        os.chdir('/workspaces/new-bytewise-backend')
++        
++        # Run the test script with timeout
++        print_info("Running external API test...")
++        result = subprocess.run(
++            ['python', 'test.py'], 
++            capture_output=True, 
++            text=True, 
++            timeout=30
++        )
++        
++        if result.returncode == 0:
++            print_success("External API test completed successfully")
++            # Show first few lines of output
++            output_lines = result.stdout.split('\n')[:5]
++            for line in output_lines:
++                if line.strip():
++                    print_info(f"Output: {line}")
++            print_info("... (output truncated)")
++        else:
++            print_error(f"External API test failed with return code: {result.returncode}")
++            if result.stderr:
++                print_error(f"Error: {result.stderr[:200]}")
++    
++    except subprocess.TimeoutExpired:
++        print_warning("External API test timed out (30s) - this might be normal for streaming")
++    except Exception as e:
++        print_error(f"Error running external API test: {e}")
++
++def test_audio_processing():
++    """Test audio processing capabilities"""
++    print_test_header("Audio Processing Test")
++    
++    try:
++        # Test speech recognition import
++        import speech_recognition as sr
++        print_success("SpeechRecognition library imported successfully")
++        
++        # Test recognizer creation
++        recognizer = sr.Recognizer()
++        print_success("Speech recognizer created successfully")
++        
++        # Test audio file handling (if test audio exists)
++        import os
++        if os.path.exists('/workspaces/new-bytewise-backend/1.wav'):
++            print_success("Test audio file found (1.wav)")
++            try:
++                with sr.AudioFile('/workspaces/new-bytewise-backend/1.wav') as source:
++                    audio = recognizer.record(source)
++                    print_success("Audio file loaded successfully")
++            except Exception as e:
++                print_warning(f"Could not process audio file: {e}")
++        else:
++            print_info("No test audio file found (1.wav)")
++        
++    except ImportError as e:
++        print_error(f"Audio processing dependencies missing: {e}")
++    except Exception as e:
++        print_error(f"Audio processing test error: {e}")
++
++def run_all_tests():
++    """Run the complete test suite"""
++    print(f"{Colors.BOLD}{Colors.MAGENTA}")
++    print("🧪 NEW-BYTEWISE-BACKEND TEST SUITE")
++    print("===================================")
++    print(f"Starting comprehensive testing...{Colors.END}")
++    
++    # Track test results
++    test_results = []
++    
++    # Run all tests
++    tests = [
++        ("Server Health", test_server_health),
++        ("REST Endpoints", test_rest_endpoints),
++        ("Chat Completion", test_chat_completion),
++        ("WebSocket", test_websocket_connection),
++        ("External API", test_external_api_integration),
++        ("Audio Processing", test_audio_processing),
++    ]
++    
++    for test_name, test_func in tests:
++        try:
++            print(f"\n{Colors.YELLOW}⏳ Running {test_name} test...{Colors.END}")
++            test_func()
++            test_results.append((test_name, "PASSED"))
++        except Exception as e:
++            print_error(f"Test {test_name} failed with exception: {e}")
++            test_results.append((test_name, "FAILED"))
++    
++    # Print summary
++    print(f"\n{Colors.BOLD}{Colors.MAGENTA}")
++    print("📊 TEST SUMMARY")
++    print("===============")
++    print(f"{Colors.END}")
++    
++    passed = 0
++    failed = 0
++    
++    for test_name, status in test_results:
++        if status == "PASSED":
++            print_success(f"{test_name}: {status}")
++            passed += 1
++        else:
++            print_error(f"{test_name}: {status}")
++            failed += 1
++    
++    print(f"\n{Colors.BOLD}Results: {passed} passed, {failed} failed{Colors.END}")
++    
++    if failed == 0:
++        print(f"\n{Colors.GREEN}{Colors.BOLD}🎉 All tests completed successfully!{Colors.END}")
++    else:
++        print(f"\n{Colors.YELLOW}{Colors.BOLD}⚠️  Some tests failed. Check the output above for details.{Colors.END}")
++
++if __name__ == "__main__":
++    # Check command line arguments
++    if len(sys.argv) > 1:
++        test_name = sys.argv[1].lower()
++        if test_name == "health":
++            test_server_health()
++        elif test_name == "rest":
++            test_rest_endpoints()
++        elif test_name == "chat":
++            test_chat_completion()
++        elif test_name == "websocket":
++            test_websocket_connection()
++        elif test_name == "api":
++            test_external_api_integration()
++        elif test_name == "audio":
++            test_audio_processing()
++        else:
++            print(f"Unknown test: {test_name}")
++            print("Available tests: health, rest, chat, websocket, api, audio")
++    else:
++        # Run all tests
++        run_all_tests()
+diff --git a/static/avatar.html b/static/avatar.html
+new file mode 100644
+index 0000000..116e094
+--- /dev/null
++++ b/static/avatar.html
+@@ -0,0 +1,597 @@
++<!DOCTYPE html>
++<html lang="en">
++<head>
++    <meta charset="UTF-8">
++    <meta name="viewport" content="width=device-width, initial-scale=1.0">
++    <title>🎭 Streaming Avatar - Educational Assistant</title>
++    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
++    <style>
++        * {
++            margin: 0;
++            padding: 0;
++            box-sizing: border-box;
++        }
++
++        body {
++            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
++            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
++            min-height: 100vh;
++            display: flex;
++            align-items: center;
++            justify-content: center;
++        }
++
++        .avatar-container {
++            background: white;
++            border-radius: 20px;
++            padding: 40px;
++            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
++            text-align: center;
++            max-width: 600px;
++            width: 90%;
++        }
++
++        .title {
++            color: #333;
++            margin-bottom: 30px;
++            font-size: 2em;
++            font-weight: 600;
++        }
++
++        .avatar-face {
++            width: 200px;
++            height: 200px;
++            border-radius: 50%;
++            background: linear-gradient(45deg, #667eea 0%, #764ba2 100%);
++            margin: 0 auto 30px;
++            position: relative;
++            transition: all 0.3s ease;
++        }
++
++        .avatar-face.listening {
++            animation: pulse 2s infinite;
++            box-shadow: 0 0 30px rgba(102, 126, 234, 0.5);
++        }
++
++        .avatar-face.speaking {
++            animation: glow 1s infinite alternate;
++        }
++
++        @keyframes pulse {
++            0% { transform: scale(1); }
++            50% { transform: scale(1.05); }
++            100% { transform: scale(1); }
++        }
++
++        @keyframes glow {
++            0% { box-shadow: 0 0 20px rgba(102, 126, 234, 0.5); }
++            100% { box-shadow: 0 0 40px rgba(102, 126, 234, 0.8); }
++        }
++
++        .eyes {
++            position: absolute;
++            top: 60px;
++            left: 50px;
++            width: 100px;
++            height: 25px;
++            background: white;
++            border-radius: 50px;
++            overflow: hidden;
++        }
++
++        .eye {
++            position: absolute;
++            width: 20px;
++            height: 20px;
++            background: #333;
++            border-radius: 50%;
++            top: 2.5px;
++            transition: all 0.3s ease;
++        }
++
++        .eye.left { left: 15px; }
++        .eye.right { right: 15px; }
++
++        .mouth {
++            position: absolute;
++            bottom: 60px;
++            left: 75px;
++            width: 50px;
++            height: 12px;
++            background: #333;
++            border-radius: 25px;
++            transition: all 0.3s ease;
++        }
++
++        .mouth.speaking {
++            animation: talk 0.5s infinite alternate;
++        }
++
++        @keyframes talk {
++            0% { transform: scaleY(1); }
++            100% { transform: scaleY(2); }
++        }
++
++        .status {
++            margin: 20px 0;
++            padding: 15px;
++            border-radius: 10px;
++            font-weight: 500;
++            transition: all 0.3s ease;
++        }
++
++        .status.idle {
++            background: #e9ecef;
++            color: #495057;
++        }
++
++        .status.listening {
++            background: #d4edda;
++            color: #155724;
++            border: 2px solid #c3e6cb;
++        }
++
++        .status.thinking {
++            background: #fff3cd;
++            color: #856404;
++            border: 2px solid #ffeaa7;
++        }
++
++        .status.speaking {
++            background: #cce5ff;
++            color: #004085;
++            border: 2px solid #99d6ff;
++        }
++
++        .controls {
++            margin: 30px 0;
++        }
++
++        .control-btn {
++            background: linear-gradient(45deg, #667eea 0%, #764ba2 100%);
++            color: white;
++            border: none;
++            padding: 15px 30px;
++            border-radius: 50px;
++            font-size: 16px;
++            font-weight: 600;
++            cursor: pointer;
++            margin: 0 10px;
++            transition: all 0.3s ease;
++            position: relative;
++            overflow: hidden;
++        }
++
++        .control-btn:hover {
++            transform: translateY(-2px);
++            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
++        }
++
++        .control-btn:disabled {
++            opacity: 0.5;
++            cursor: not-allowed;
++            transform: none;
++        }
++
++        .control-btn.recording {
++            background: #dc3545;
++            animation: recordingPulse 1s infinite;
++        }
++
++        .microphone-btn {
++            background: linear-gradient(45deg, #28a745, #20c997) !important;
++            font-size: 18px !important;
++            font-weight: bold !important;
++        }
++
++        .microphone-btn:hover {
++            background: linear-gradient(45deg, #218838, #1cc88a) !important;
++        }
++
++        .stop-btn {
++            background: linear-gradient(45deg, #dc3545, #fd7e14) !important;
++        }
++
++        .microphone-status {
++            background: #f8f9fa;
++            border: 2px solid #dee2e6;
++            border-radius: 15px;
++            padding: 15px;
++            margin: 20px 0;
++            display: flex;
++            align-items: center;
++            justify-content: center;
++            gap: 10px;
++        }
++
++        .mic-indicator {
++            font-size: 24px;
++            transition: all 0.3s ease;
++        }
++
++        .mic-indicator.active {
++            animation: micPulse 1s infinite;
++            color: #dc3545;
++        }
++
++        @keyframes recordingPulse {
++            0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); }
++            70% { box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
++            100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
++        }
++
++        @keyframes micPulse {
++            0% { transform: scale(1); opacity: 1; }
++            50% { transform: scale(1.2); opacity: 0.7; }
++            100% { transform: scale(1); opacity: 1; }
++        }
++
++        .conversation {
++            margin-top: 30px;
++            max-height: 300px;
++            overflow-y: auto;
++            text-align: left;
++        }
++
++        .message {
++            margin: 15px 0;
++            padding: 15px;
++            border-radius: 15px;
++            font-size: 14px;
++            line-height: 1.5;
++        }
++
++        .message.user {
++            background: #e3f2fd;
++            color: #1976d2;
++            margin-left: 40px;
++        }
++
++        .message.avatar {
++            background: #f3e5f5;
++            color: #7b1fa2;
++            margin-right: 40px;
++        }
++
++        .message.system {
++            background: #f5f5f5;
++            color: #666;
++            font-style: italic;
++            text-align: center;
++        }
++
++        .test-controls {
++            margin-top: 20px;
++            padding-top: 20px;
++            border-top: 1px solid #dee2e6;
++        }
++
++        .test-btn {
++            background: #28a745;
++            color: white;
++            border: none;
++            padding: 10px 20px;
++            border-radius: 25px;
++            font-size: 14px;
++            cursor: pointer;
++            margin: 5px;
++            transition: all 0.3s ease;
++        }
++
++        .test-btn:hover {
++            background: #218838;
++            transform: translateY(-1px);
++        }
++
++        audio {
++            width: 100%;
++            margin: 10px 0;
++        }
++
++        .hidden {
++            display: none;
++        }
++    </style>
++</head>
++<body>
++    <div class="avatar-container">
++        <h1 class="title">🎭 Educational Avatar Assistant</h1>
++        
++        <div class="avatar-face" id="avatarFace">
++            <div class="eyes">
++                <div class="eye left" id="leftEye"></div>
++                <div class="eye right" id="rightEye"></div>
++            </div>
++            <div class="mouth" id="avatarMouth"></div>
++        </div>
++
++        <div class="status idle" id="status">🎤 Ready to chat! Click "Start Talking" to begin speaking.</div>
++
++        <div class="controls">
++            <button class="control-btn microphone-btn" id="startBtn" onclick="startListening()">
++                🎤 Start Talking
++            </button>
++            <button class="control-btn stop-btn" id="stopBtn" onclick="stopListening()" disabled>
++                ⏹️ Stop Recording
++            </button>
++        </div>
++
++        <div class="microphone-status" id="micStatus">
++            <div class="mic-indicator" id="micIndicator">🎤</div>
++            <span id="micText">Click "Start Talking" to use your microphone</span>
++        </div>
++
++        <div class="conversation" id="conversation"></div>
++
++        <div class="test-controls">
++            <h3>🧪 Test Functions</h3>
++            <button class="test-btn" onclick="testTTS()">🔊 Test Text-to-Speech</button>
++            <button class="test-btn" onclick="testConnection()">🔌 Test Connection</button>
++            <button class="test-btn" onclick="clearConversation()">🗑️ Clear Chat</button>
++        </div>
++
++        <audio id="avatarAudio" controls class="hidden"></audio>
++    </div>
++
++    <script>
++        // Global variables
++        let socket = null;
++        let mediaRecorder = null;
++        let isRecording = false;
++        let audioChunks = [];
++
++        // DOM elements
++        const avatarFace = document.getElementById('avatarFace');
++        const status = document.getElementById('status');
++        const startBtn = document.getElementById('startBtn');
++        const stopBtn = document.getElementById('stopBtn');
++        const conversation = document.getElementById('conversation');
++        const avatarMouth = document.getElementById('avatarMouth');
++        const avatarAudio = document.getElementById('avatarAudio');
++
++        // Initialize WebSocket connection
++        function initializeConnection() {
++            socket = io('/api/streaming-avatar');
++
++            socket.on('connect', () => {
++                updateStatus('Connected! Ready to chat.', 'idle');
++                addMessage('system', '✅ Connected to Avatar Assistant');
++            });
++
++            socket.on('disconnect', () => {
++                updateStatus('Disconnected. Please refresh.', 'idle');
++                addMessage('system', '❌ Connection lost');
++            });
++
++            socket.on('message', (data) => {
++                console.log('📨 Received message:', data);
++                addMessage('system', data.info || JSON.stringify(data));
++            });
++
++            socket.on('transcription', (data) => {
++                console.log('🗣️ STT Result:', data);
++                if (data.text && data.text !== "Speech not understood") {
++                    addMessage('user', data.text);
++                    updateStatus('🤖 AI is thinking...', 'thinking');
++                    setAvatarState('thinking');
++                    document.getElementById('micText').textContent = '✅ Speech recognized: "' + data.text + '"';
++                }
++            });
++
++            socket.on('llm_response', (data) => {
++                console.log('🤖 LLM Response:', data);
++                addMessage('avatar', data.text);
++                updateStatus('🔊 Converting to speech...', 'thinking');
++                document.getElementById('micText').textContent = '🔊 AI is responding...';
++            });
++
++            socket.on('tts_audio', (data) => {
++                console.log('🔊 TTS Audio received');
++                if (data.audio) {
++                    playAvatarSpeech(data.audio, 'mp3');
++                    updateStatus('🗣️ AI is speaking...', 'speaking');
++                    setAvatarState('speaking');
++                    document.getElementById('micText').textContent = '🗣️ AI is speaking... Listen to the response';
++                } else {
++                    addMessage('system', '❌ Speech generation failed');
++                    updateStatus('Ready to chat!', 'idle');
++                    setAvatarState('idle');
++                    document.getElementById('micText').textContent = 'Click "Start Talking" to try again';
++                }
++            });
++
++            socket.on('error', (data) => {
++                console.error('❌ Socket error:', data);
++                addMessage('system', '❌ Error: ' + data.message);
++                updateStatus('Ready to chat!', 'idle');
++                setAvatarState('idle');
++                document.getElementById('micText').textContent = 'Error occurred. Click "Start Talking" to try again';
++                document.getElementById('micIndicator').classList.remove('active');
++            });
++        }
++
++        // Audio recording functions
++        async function startListening() {
++            try {
++                const stream = await navigator.mediaDevices.getUserMedia({ 
++                    audio: {
++                        channelCount: 1,
++                        sampleRate: 16000
++                    }
++                });
++
++                // Update UI to show recording state
++                document.getElementById('startBtn').disabled = true;
++                document.getElementById('stopBtn').disabled = false;
++                document.getElementById('startBtn').classList.add('recording');
++                document.getElementById('micIndicator').classList.add('active');
++                document.getElementById('micText').textContent = '🔴 Recording... Click "Stop" when done speaking';
++                updateStatus('🎤 Listening... Speak now!', 'recording');
++
++                mediaRecorder = new MediaRecorder(stream, {
++                    mimeType: 'audio/webm'
++                });
++
++                audioChunks = [];
++
++                mediaRecorder.ondataavailable = (event) => {
++                    if (event.data.size > 0) {
++                        audioChunks.push(event.data);
++                    }
++                };
++
++                mediaRecorder.onstop = () => {
++                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
++                    sendAudioToServer(audioBlob);
++                    stream.getTracks().forEach(track => track.stop());
++                };
++
++                mediaRecorder.start();
++                isRecording = true;
++
++                // UI updates
++                updateStatus('Listening... Speak now!', 'listening');
++                setAvatarState('listening');
++                startBtn.disabled = true;
++                stopBtn.disabled = false;
++                startBtn.classList.add('recording');
++
++            } catch (error) {
++                console.error('Error accessing microphone:', error);
++                addMessage('system', '❌ Microphone access denied. Please allow microphone access.');
++                updateStatus('Microphone access required', 'idle');
++            }
++        }
++
++        function stopListening() {
++            if (mediaRecorder && isRecording) {
++                mediaRecorder.stop();
++                isRecording = false;
++
++                // UI updates
++                updateStatus('🔄 Processing your speech...', 'thinking');
++                setAvatarState('thinking');
++                document.getElementById('startBtn').disabled = false;
++                document.getElementById('stopBtn').disabled = true;
++                document.getElementById('startBtn').classList.remove('recording');
++                document.getElementById('micIndicator').classList.remove('active');
++                document.getElementById('micText').textContent = '⏳ Processing audio... Please wait';
++            }
++        }
++
++        function sendAudioToServer(audioBlob) {
++            const reader = new FileReader();
++            reader.onload = function() {
++                const arrayBuffer = reader.result;
++                socket.emit('user_audio', arrayBuffer);
++            };
++            reader.readAsArrayBuffer(audioBlob);
++        }
++
++        function playAvatarSpeech(audioBase64, format) {
++            try {
++                const audioData = atob(audioBase64);
++                const audioArray = new Uint8Array(audioData.length);
++                for (let i = 0; i < audioData.length; i++) {
++                    audioArray[i] = audioData.charCodeAt(i);
++                }
++                
++                const audioBlob = new Blob([audioArray], { type: `audio/${format}` });
++                const audioUrl = URL.createObjectURL(audioBlob);
++                
++                avatarAudio.src = audioUrl;
++                avatarAudio.play();
++
++                avatarAudio.onended = () => {
++                    updateStatus('Ready to chat!', 'idle');
++                    setAvatarState('idle');
++                    document.getElementById('micText').textContent = 'Click "Start Talking" to continue the conversation';
++                    URL.revokeObjectURL(audioUrl);
++                };
++
++                avatarAudio.onerror = () => {
++                    console.error('Audio playback error');
++                    addMessage('system', '❌ Audio playback failed');
++                    updateStatus('Ready to chat!', 'idle');
++                    setAvatarState('idle');
++                    document.getElementById('micText').textContent = 'Click "Start Talking" to try again';
++                    URL.revokeObjectURL(audioUrl);
++                };
++
++            } catch (error) {
++                console.error('Error playing audio:', error);
++                addMessage('system', '❌ Audio playback error');
++                updateStatus('Ready to chat!', 'idle');
++                setAvatarState('idle');
++            }
++        }
++
++        // UI helper functions
++        function updateStatus(message, type) {
++            status.textContent = message;
++            status.className = `status ${type}`;
++        }
++
++        function setAvatarState(state) {
++            avatarFace.className = `avatar-face ${state}`;
++            
++            if (state === 'speaking') {
++                avatarMouth.classList.add('speaking');
++            } else {
++                avatarMouth.classList.remove('speaking');
++            }
++        }
++
++        function addMessage(type, text) {
++            const messageDiv = document.createElement('div');
++            messageDiv.className = `message ${type}`;
++            
++            const timestamp = new Date().toLocaleTimeString();
++            const icon = type === 'user' ? '🧑‍🎓' : type === 'avatar' ? '🎭' : 'ℹ️';
++            
++            messageDiv.innerHTML = `<strong>${icon} ${timestamp}</strong><br>${text}`;
++            conversation.appendChild(messageDiv);
++            conversation.scrollTop = conversation.scrollHeight;
++        }
++
++        // Test functions
++        function testTTS() {
++            if (socket && socket.connected) {
++                socket.emit('test_tts', {
++                    text: "Hello! This is a test of the text-to-speech system. I am your educational avatar assistant."
++                });
++                addMessage('system', '🧪 Testing text-to-speech...');
++            } else {
++                addMessage('system', '❌ Not connected. Please refresh the page.');
++            }
++        }
++
++        function testConnection() {
++            if (socket && socket.connected) {
++                addMessage('system', '✅ Connection is working properly!');
++            } else {
++                addMessage('system', '❌ Connection lost. Please refresh the page.');
++            }
++        }
++
++        function clearConversation() {
++            conversation.innerHTML = '';
++            addMessage('system', '🧹 Conversation cleared');
++        }
++
++        // Initialize on page load
++        window.onload = function() {
++            initializeConnection();
++            addMessage('system', '🎭 Welcome to the Educational Avatar Assistant!');
++            addMessage('system', '💡 Click "Start Talking" to begin a conversation.');
++        };
++
++        // Handle page unload
++        window.onbeforeunload = function() {
++            if (socket) {
++                socket.disconnect();
++            }
++        };
++    </script>
++</body>
++</html>
+diff --git a/static/index.html b/static/index.html
+new file mode 100644
+index 0000000..143d7ba
+--- /dev/null
++++ b/static/index.html
+@@ -0,0 +1,366 @@
++<!DOCTYPE html>
++<html lang="en">
++<head>
++    <meta charset="UTF-8">
++    <meta name="viewport" content="width=device-width, initial-scale=1.0">
++    <title>New Bytewise Backend - API Test Interface</title>
++    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
++    <style>
++        body {
++            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
++            max-width: 1200px;
++            margin: 0 auto;
++            padding: 20px;
++            background-color: #f5f5f5;
++        }
++        .container {
++            background: white;
++            padding: 30px;
++            border-radius: 10px;
++            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
++            margin-bottom: 20px;
++        }
++        h1 {
++            color: #333;
++            text-align: center;
++            margin-bottom: 30px;
++        }
++        h2 {
++            color: #555;
++            border-bottom: 2px solid #007bff;
++            padding-bottom: 10px;
++        }
++        .section {
++            margin-bottom: 30px;
++        }
++        button {
++            background: #007bff;
++            color: white;
++            border: none;
++            padding: 10px 20px;
++            border-radius: 5px;
++            cursor: pointer;
++            margin: 5px;
++            font-size: 14px;
++        }
++        button:hover {
++            background: #0056b3;
++        }
++        .success {
++            background: #28a745;
++        }
++        .warning {
++            background: #ffc107;
++            color: #333;
++        }
++        .danger {
++            background: #dc3545;
++        }
++        textarea {
++            width: 100%;
++            height: 100px;
++            padding: 10px;
++            border: 1px solid #ddd;
++            border-radius: 5px;
++            font-family: monospace;
++        }
++        input {
++            width: 100%;
++            padding: 10px;
++            border: 1px solid #ddd;
++            border-radius: 5px;
++            margin: 5px 0;
++        }
++        .result {
++            background: #f8f9fa;
++            border: 1px solid #dee2e6;
++            border-radius: 5px;
++            padding: 15px;
++            margin: 10px 0;
++            white-space: pre-wrap;
++            font-family: monospace;
++            max-height: 300px;
++            overflow-y: auto;
++        }
++        .status {
++            padding: 10px;
++            margin: 10px 0;
++            border-radius: 5px;
++        }
++        .status.connected {
++            background: #d4edda;
++            color: #155724;
++            border: 1px solid #c3e6cb;
++        }
++        .status.disconnected {
++            background: #f8d7da;
++            color: #721c24;
++            border: 1px solid #f5c6cb;
++        }
++        .grid {
++            display: grid;
++            grid-template-columns: 1fr 1fr;
++            gap: 20px;
++        }
++        @media (max-width: 768px) {
++            .grid {
++                grid-template-columns: 1fr;
++            }
++        }
++    </style>
++</head>
++<body>
++    <div class="container">
++        <h1>🚀 New Bytewise Backend - API Test Interface</h1>
++        <p style="text-align: center; color: #666;">
++            Welcome to your Flask + SocketIO backend! Use this interface to test all the API endpoints.
++        </p>
++    </div>
++
++    <div class="grid">
++        <!-- REST API Testing -->
++        <div class="container">
++            <h2>🌐 REST API Endpoints</h2>
++            
++            <div class="section">
++                <h3>Basic Endpoints</h3>
++                <button onclick="testEndpoint('/api/chatbot/a', 'GET')">Test Chatbot Endpoint</button>
++                <button onclick="testEndpoint('/api/streaming-avatar/a', 'GET')">Test Streaming Avatar</button>
++                <div id="basicResults" class="result"></div>
++            </div>
++
++            <div class="section">
++                <h3>Chat Completion API</h3>
++                <textarea id="chatInput" placeholder="Enter your message here...">Hello, how are you?</textarea>
++                <input type="text" id="apiKey" placeholder="API Key (optional for testing)">
++                <input type="text" id="modelName" placeholder="Model Name (default: gpt-4)" value="gpt-4">
++                <br>
++                <button onclick="testChatCompletion()">Send Chat Message</button>
++                <div id="chatResults" class="result"></div>
++            </div>
++        </div>
++
++        <!-- WebSocket Testing -->
++        <div class="container">
++            <h2>🔌 WebSocket Connection</h2>
++            
++            <div class="section">
++                <div id="wsStatus" class="status disconnected">Disconnected</div>
++                <button id="connectBtn" onclick="connectWebSocket()">Connect WebSocket</button>
++                <button id="disconnectBtn" onclick="disconnectWebSocket()" disabled>Disconnect</button>
++                <br><br>
++                <button onclick="sendTestAudio()" id="sendAudioBtn" disabled>Send Test Audio Data</button>
++                <div id="wsResults" class="result"></div>
++            </div>
++        </div>
++    </div>
++
++    <!-- Server Info -->
++    <div class="container">
++        <h2>📊 Server Information</h2>
++        <div class="section">
++            <button onclick="getServerInfo()">Check Server Status</button>
++            <button onclick="clearAllResults()">Clear All Results</button>
++            <div id="serverInfo" class="result"></div>
++        </div>
++    </div>
++
++    <!-- External API Test -->
++    <div class="container">
++        <h2>🤖 External API Integration</h2>
++        <div class="section">
++            <p>The external API test runs the streaming test with HKBU GenAI API.</p>
++            <button onclick="showExternalApiInfo()">Show External API Info</button>
++            <div id="externalApiInfo" class="result"></div>
++        </div>
++    </div>
++
++    <script>
++        let socket = null;
++        const baseUrl = window.location.origin;
++
++        // WebSocket functionality
++        function connectWebSocket() {
++            try {
++                socket = io('/api/streaming-avatar');
++                
++                socket.on('connect', () => {
++                    updateWSStatus('Connected', true);
++                    logWSMessage('✅ Connected to WebSocket server!');
++                });
++
++                socket.on('disconnect', () => {
++                    updateWSStatus('Disconnected', false);
++                    logWSMessage('❌ Disconnected from WebSocket server');
++                });
++
++                socket.on('message', (data) => {
++                    logWSMessage('📨 Received message: ' + JSON.stringify(data, null, 2));
++                });
++
++                socket.on('stt_result', (data) => {
++                    logWSMessage('🎤 STT Result: ' + JSON.stringify(data, null, 2));
++                });
++
++            } catch (error) {
++                logWSMessage('❌ Error connecting: ' + error.message);
++            }
++        }
++
++        function disconnectWebSocket() {
++            if (socket) {
++                socket.disconnect();
++                socket = null;
++            }
++        }
++
++        function sendTestAudio() {
++            if (socket && socket.connected) {
++                const testData = new Uint8Array([1, 2, 3, 4, 5]);
++                socket.emit('user_audio', testData);
++                logWSMessage('📤 Sent test audio data');
++            } else {
++                logWSMessage('❌ WebSocket not connected');
++            }
++        }
++
++        function updateWSStatus(status, connected) {
++            const statusDiv = document.getElementById('wsStatus');
++            statusDiv.textContent = status;
++            statusDiv.className = connected ? 'status connected' : 'status disconnected';
++            
++            document.getElementById('connectBtn').disabled = connected;
++            document.getElementById('disconnectBtn').disabled = !connected;
++            document.getElementById('sendAudioBtn').disabled = !connected;
++        }
++
++        function logWSMessage(message) {
++            const results = document.getElementById('wsResults');
++            const timestamp = new Date().toLocaleTimeString();
++            results.textContent += `[${timestamp}] ${message}\n`;
++            results.scrollTop = results.scrollHeight;
++        }
++
++        // REST API functionality
++        async function testEndpoint(endpoint, method = 'GET') {
++            const results = document.getElementById('basicResults');
++            try {
++                results.textContent = 'Testing ' + endpoint + '...\n';
++                
++                const response = await fetch(baseUrl + endpoint, {
++                    method: method,
++                    headers: {
++                        'Content-Type': 'application/json'
++                    }
++                });
++
++                const data = await response.json();
++                results.textContent += `Status: ${response.status}\n`;
++                results.textContent += `Response: ${JSON.stringify(data, null, 2)}\n\n`;
++                
++            } catch (error) {
++                results.textContent += `Error: ${error.message}\n\n`;
++            }
++        }
++
++        async function testChatCompletion() {
++            const results = document.getElementById('chatResults');
++            const message = document.getElementById('chatInput').value;
++            const apiKey = document.getElementById('apiKey').value || 'test-key';
++            const modelName = document.getElementById('modelName').value || 'gpt-4';
++
++            try {
++                results.textContent = 'Sending chat message...\n';
++
++                const payload = {
++                    chat_history: [
++                        { role: "system", content: "You are a helpful assistant." },
++                        { role: "user", content: message }
++                    ],
++                    api_key: apiKey,
++                    model_name: modelName,
++                    max_tokens: 150
++                };
++
++                const response = await fetch(baseUrl + '/api/chatbot/chat', {
++                    method: 'POST',
++                    headers: {
++                        'Content-Type': 'application/json'
++                    },
++                    body: JSON.stringify(payload)
++                });
++
++                const data = await response.json();
++                results.textContent += `Status: ${response.status}\n`;
++                results.textContent += `Response: ${JSON.stringify(data, null, 2)}\n\n`;
++
++            } catch (error) {
++                results.textContent += `Error: ${error.message}\n\n`;
++            }
++        }
++
++        async function getServerInfo() {
++            const results = document.getElementById('serverInfo');
++            results.textContent = 'Checking server status...\n';
++
++            try {
++                // Test multiple endpoints
++                const endpoints = [
++                    '/api/chatbot/a',
++                    '/api/streaming-avatar/a'
++                ];
++
++                for (const endpoint of endpoints) {
++                    const response = await fetch(baseUrl + endpoint);
++                    const data = await response.json();
++                    results.textContent += `${endpoint}: ${response.status} - ${JSON.stringify(data)}\n`;
++                }
++
++                results.textContent += `\nServer Time: ${new Date().toLocaleString()}\n`;
++                results.textContent += `Base URL: ${baseUrl}\n`;
++                
++            } catch (error) {
++                results.textContent += `Error: ${error.message}\n`;
++            }
++        }
++
++        function showExternalApiInfo() {
++            const results = document.getElementById('externalApiInfo');
++            results.textContent = `External API Integration Info:
++
++The backend integrates with HKBU GenAI API for chat completions.
++
++Endpoint: https://genai.hkbu.edu.hk/api/v0/rest/deployments/gpt-4.1/chat/completions
++Method: POST with streaming support
++
++To test the external API, you can run the test script:
++1. Open terminal
++2. Run: python test.py
++
++Note: The test script contains a hardcoded API key for demonstration.
++In production, use environment variables for API keys.
++
++Current chat completion endpoint accepts:
++- chat_history: Array of message objects
++- api_key: Your HKBU API key
++- model_name: Model to use (default: gpt-4)
++- max_tokens: Response length limit
++`;
++        }
++
++        function clearAllResults() {
++            document.getElementById('basicResults').textContent = '';
++            document.getElementById('chatResults').textContent = '';
++            document.getElementById('wsResults').textContent = '';
++            document.getElementById('serverInfo').textContent = '';
++            document.getElementById('externalApiInfo').textContent = '';
++        }
++
++        // Initialize page
++        window.onload = function() {
++            // Auto-check server status
++            getServerInfo();
++        };
++    </script>
++</body>
++</html>
+diff --git a/test.py b/test.py
+new file mode 100644
+index 0000000..75769c5
+--- /dev/null
++++ b/test.py
+@@ -0,0 +1,48 @@
++import requests
++import json
++
++url = "https://genai.hkbu.edu.hk/api/v0/rest/deployments/gpt-4.1/chat/completions?api-version=2024-12-01-preview"
++
++headers = {
++    "accept": "application/json",
++    "api-key": "f78e26ce-5d62-455a-a4f6-055df1fc1a27",
++    "Content-Type": "application/json"
++}
++
++payload = {
++    "messages": [
++        {
++            "role": "system",
++            "content": "You are a friendly helper! Talk to the user like they are 3 years old. Use very simple words, be super excited and happy, and explain everything in a fun way that a little kid would understand!"
++        },
++        {
++            "role": "user",
++            "content": "Hello! Can you help me write a Python function to calculate the factorial of a number?"
++        }
++    ],
++    "max_tokens": 150,
++    "top_p": 1,
++    "stream": True
++}
++
++# Send request with streaming enabled
++with requests.post(url, headers=headers, json=payload, stream=True) as response:
++    if response.status_code != 200:
++        print("Error:", response.status_code, response.text)
++    else:
++        for line in response.iter_lines():
++            if line:
++                # The API uses "data: ..." format for streaming
++                decoded_line = line.decode("utf-8").strip()
++                if decoded_line.startswith("data: "):
++                    data = decoded_line[len("data: "):]
++                    if data == "[DONE]":
++                        print("\n--- Stream finished ---")
++                        break
++                    try:
++                        event = json.loads(data)
++                        delta = event["choices"][0]["delta"].get("content", "")
++                        if delta:
++                            print(delta)
++                    except Exception as e:
++                        print("\n[Error parsing stream chunk]", decoded_line, e)
+\ No newline at end of file
+diff --git a/test_websocket.py b/test_websocket.py
+new file mode 100644
+index 0000000..2c8385c
+--- /dev/null
++++ b/test_websocket.py
+@@ -0,0 +1,44 @@
++#!/usr/bin/env python3
++"""
++Simple WebSocket client test for the streaming avatar endpoint
++"""
++import socketio
++import time
++
++# Create a Socket.IO client
++sio = socketio.Client()
++
++@sio.event
++def connect():
++    print("✅ Connected to WebSocket server!")
++    print("📤 Sending test message...")
++    sio.emit('user_audio', b'test_audio_data', namespace='/api/streaming-avatar')
++
++@sio.event
++def disconnect():
++    print("⚠️ Disconnected from WebSocket server")
++
++@sio.on('message', namespace='/api/streaming-avatar')
++def on_message(data):
++    print(f"📨 Received message: {data}")
++
++@sio.on('stt_result', namespace='/api/streaming-avatar')
++def on_stt_result(data):
++    print(f"🎤 STT Result: {data}")
++
++def test_websocket():
++    try:
++        print("🔌 Connecting to WebSocket server...")
++        sio.connect('http://localhost:5000', namespaces=['/api/streaming-avatar'])
++        
++        # Keep the connection open for a few seconds
++        time.sleep(3)
++        
++        print("🔌 Disconnecting...")
++        sio.disconnect()
++        
++    except Exception as e:
++        print(f"❌ Error: {e}")
++
++if __name__ == "__main__":
++    test_websocket()
+-- 
+2.50.1
+

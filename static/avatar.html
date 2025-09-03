@@ -349,9 +349,13 @@
         const avatarMouth = document.getElementById('avatarMouth');
         const avatarAudio = document.getElementById('avatarAudio');
 
+        // Get base path from URL or use default
+        const basePath = window.location.pathname.includes('/audiotutor') ? '/audiotutor' : '';
+
         // Initialize WebSocket connection
         function initializeConnection() {
-            socket = io('/api/streaming-avatar');
+            const socketPath = basePath ? `${basePath}/socket.io/` : '/socket.io/';
+            socket = io(`${basePath}/api/streaming-avatar`, { path: socketPath });
 
             socket.on('connect', () => {
                 updateStatus('Connected! Ready to chat.', 'idle');
